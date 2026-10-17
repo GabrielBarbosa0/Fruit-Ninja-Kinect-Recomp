@@ -122,7 +122,8 @@ $compatPatches = @(
     (Join-Path $repoRoot 'patches/xenon-recomp-no-dxc-coverage.patch'),
     (Join-Path $repoRoot 'patches/xenon-recomp-runtime-host-safe-exit.patch'),
     (Join-Path $repoRoot 'patches/xenon-recomp-dxc-mingw-iids.patch'),
-    (Join-Path $repoRoot 'patches/xenon-recomp-named-semaphore.patch')
+    (Join-Path $repoRoot 'patches/xenon-recomp-named-semaphore.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-vector-splat-word-width.patch')
 )
 Push-Location $XenonRoot
 try {

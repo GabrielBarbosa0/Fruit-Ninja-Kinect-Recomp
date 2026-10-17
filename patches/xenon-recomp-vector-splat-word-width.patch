@@ -1,0 +1,28 @@
+diff --git a/src/cpu/codegen/emission/instruction_emission.cpp b/src/cpu/codegen/emission/instruction_emission.cpp
+index 437d4ee..0d93980 100644
+--- a/src/cpu/codegen/emission/instruction_emission.cpp
++++ b/src/cpu/codegen/emission/instruction_emission.cpp
+@@ -291,12 +291,17 @@ std::string emit_one(const Instruction&i, const std::vector<Type>& value_types){
+       // Native vector splat
+       if (i.op == Op::VSplat) {
+         const auto m = guest_mnemonic(i);
+-        if (m.find("vspltb") == 0) return decl(i, "aot::vector_splat_byte<" + enum_name(i) + ">(" + arg(i,0) + "," + std::to_string(i.imm0) + ")");
+-        if (m.find("vsplth") == 0) return decl(i, "aot::vector_splat_halfword<" + enum_name(i) + ">(" + arg(i,0) + "," + std::to_string(i.imm0) + ")");
+-        if (m.find("vspltw") == 0) return decl(i, "aot::vector_splat_word<" + enum_name(i) + ">(" + arg(i,0) + "," + std::to_string(i.imm0) + ")");
+-        if (m.find("vspltisb") == 0) return decl(i, "aot::vector_splat_immediate_byte<" + enum_name(i) + ">(" + std::to_string(i.imm0) + ")");
+-        if (m.find("vspltish") == 0) return decl(i, "aot::vector_splat_immediate_halfword<" + enum_name(i) + ">(" + std::to_string(i.imm0) + ")");
+-        if (m.find("vspltisw") == 0) return decl(i, "aot::vector_splat_immediate_word<" + enum_name(i) + ">(" + std::to_string(i.imm0) + ")");
++        // Vector helper decoders consume the original 32-bit PPC word. The IR
++        // immediate is 64-bit and may carry upper-bit analysis metadata, so
++        // make the architectural truncation explicit in generated C++ rather
++        // than relying on an implicit narrowing conversion at every call.
++        const auto guest_word = std::to_string(static_cast<std::uint32_t>(i.imm0)) + "u";
++        if (m.find("vspltb") == 0) return decl(i, "aot::vector_splat_byte<" + enum_name(i) + ">(" + arg(i,0) + "," + guest_word + ")");
++        if (m.find("vsplth") == 0) return decl(i, "aot::vector_splat_halfword<" + enum_name(i) + ">(" + arg(i,0) + "," + guest_word + ")");
++        if (m.find("vspltw") == 0) return decl(i, "aot::vector_splat_word<" + enum_name(i) + ">(" + arg(i,0) + "," + guest_word + ")");
++        if (m.find("vspltisb") == 0) return decl(i, "aot::vector_splat_immediate_byte<" + enum_name(i) + ">(" + guest_word + ")");
++        if (m.find("vspltish") == 0) return decl(i, "aot::vector_splat_immediate_halfword<" + enum_name(i) + ">(" + guest_word + ")");
++        if (m.find("vspltisw") == 0) return decl(i, "aot::vector_splat_immediate_word<" + enum_name(i) + ">(" + guest_word + ")");
+       }
+       
+       // Native modular vector arithmetic
