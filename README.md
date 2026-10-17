@@ -120,11 +120,11 @@ writes inspectable `status.json`, `log.txt`, and diagnostic reports beneath
 the observation window; the default sends `stop.signal` so probes do not
 leave a background runtime behind.
 
-The current visual path reaches D3D12 command submission, but the first game
-frame is not complete yet. DXC shader compilation is disabled on LLVM-MinGW
-until the `dxcapi` UUID linkage is made compatible, and the guest currently
-leaves the front-buffer address unset. Audio is also disabled because the
-committed FFmpeg/XMA import libraries target the MSVC runtime.
+The current visual path reaches D3D12 command submission and translates both
+discovered shaders through DXC on LLVM-MinGW. The first game frame is not
+complete yet because the guest still leaves the front-buffer address unset.
+Audio is also disabled because the committed FFmpeg/XMA import libraries
+target the MSVC runtime.
 
 ## Test a real webcam
 

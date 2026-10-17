@@ -81,7 +81,9 @@ $compatPatches = @(
     (Join-Path $repoRoot 'patches/xenon-recomp-d3d12-algorithm-include.patch'),
     (Join-Path $repoRoot 'patches/xenon-recomp-d3d12-mingw-headers.patch'),
     (Join-Path $repoRoot 'patches/xenon-recomp-no-dxc-coverage.patch'),
-    (Join-Path $repoRoot 'patches/xenon-recomp-runtime-host-safe-exit.patch')
+    (Join-Path $repoRoot 'patches/xenon-recomp-runtime-host-safe-exit.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-dxc-mingw-iids.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-named-semaphore.patch')
 )
 Push-Location $XenonRoot
 try {

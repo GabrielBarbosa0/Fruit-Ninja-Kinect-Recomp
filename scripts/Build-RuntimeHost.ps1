@@ -30,10 +30,9 @@ if (-not (Test-Path -LiteralPath $xenonRoot)) {
 # both must use the same LLVM/MinGW libc++ ABI. SDL2 supplies the native game
 # window and D3D12 presents Xenos output. Audio remains disabled because the
 # committed MSVC FFmpeg/XMA import libraries require OLDNAMES, which the
-# LLVM-MinGW ABI used by the generated module does not provide. DXC also
-# remains disabled with LLVM-MinGW
-# because Microsoft's current dxcapi headers emit unresolved __mingw_uuidof
-# symbols; enabling it is tracked separately from validating the swapchain.
+# LLVM-MinGW ABI used by the generated module does not provide. The runtime's
+# DXC adapter supplies explicit COM IIDs so shader compilation works without
+# MinGW's missing __uuidof specializations.
 # AUTO dependency mode provisions Xenon's pinned SDL2 revision when absent.
 $env:Path = "$($compiler.Directory.FullName);$env:Path"
 & $cmake.FullName -S $xenonRoot -B $BuildDirectory -G Ninja `
@@ -53,7 +52,7 @@ $env:Path = "$($compiler.Directory.FullName);$env:Path"
     -DXENON_ENABLE_NETWORK=OFF `
     -DXENON_ENABLE_VULKAN=OFF `
     -DXENON_ENABLE_D3D12=ON `
-    -DXENON_ENABLE_DXC=OFF `
+    -DXENON_ENABLE_DXC=ON `
     -DXENON_DEPENDENCY_MODE=AUTO `
     -DXENON_AUTO_BOOTSTRAP_DEPS=ON `
     -DXENON_FETCH_MISSING_DEPS=ON

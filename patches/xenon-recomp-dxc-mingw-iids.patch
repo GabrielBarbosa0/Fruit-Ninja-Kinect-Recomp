@@ -1,0 +1,85 @@
+diff --git a/src/graphics/dxc/shader_compiler.cpp b/src/graphics/dxc/shader_compiler.cpp
+index 90f2440..d868d65 100644
+--- a/src/graphics/dxc/shader_compiler.cpp
++++ b/src/graphics/dxc/shader_compiler.cpp
+@@ -12,7 +12,16 @@
+ #include <OleAuto.h>
+ #include <Unknwn.h>
+ #endif
++#if defined(__MINGW32__)
++// dxcapi.h's default Windows declaration uses __declspec(uuid), which Clang
++// in GNU/MinGW mode ignores. The interfaces themselves remain normal COM
++// vtables; explicit IIDs below avoid relying on __mingw_uuidof specializations.
++#define CROSS_PLATFORM_UUIDOF(interface, spec) struct interface;
++#endif
+ #include <dxc/dxcapi.h>
++#if defined(__MINGW32__)
++#undef CROSS_PLATFORM_UUIDOF
++#endif
+ #if defined(_WIN32)
+ #include <wrl/client.h>
+ #endif
+@@ -26,6 +35,22 @@ template <typename T>
+ using ComPtr = CComPtr<T>;
+ #endif
+
++inline constexpr GUID kIidDxcBlob = {
++    0x8ba5fb08, 0x5195, 0x40e2, {0xac, 0x58, 0x0d, 0x98, 0x9c, 0x3a, 0x01, 0x02}};
++inline constexpr GUID kIidDxcBlobUtf8 = {
++    0x3da636c9, 0xba71, 0x4024, {0xa3, 0x01, 0x30, 0xcb, 0xf1, 0x25, 0x30, 0x5b}};
++inline constexpr GUID kIidDxcUtils = {
++    0x4605c4cb, 0x2019, 0x492a, {0xad, 0xa4, 0x65, 0xf2, 0x0b, 0xb7, 0xd6, 0x7f}};
++inline constexpr GUID kIidDxcResult = {
++    0x58346cda, 0xdde7, 0x4497, {0x94, 0x61, 0x6f, 0x87, 0xaf, 0x5e, 0x06, 0x59}};
++inline constexpr GUID kIidDxcCompiler3 = {
++    0x228b4687, 0x5a6a, 0x4730, {0x90, 0x0c, 0x97, 0x02, 0xb2, 0x20, 0x3f, 0x54}};
++
++template <typename T>
++void** receive(ComPtr<T>& pointer) {
++  return reinterpret_cast<void**>(pointer.ReleaseAndGetAddressOf());
++}
++
+ std::uint64_t mix(std::uint64_t hash, std::uint64_t value) noexcept {
+   for (unsigned i = 0; i < 8; ++i) {
+     hash ^= static_cast<std::uint8_t>(value >> (i * 8u));
+@@ -55,12 +80,12 @@ std::wstring widen_ascii(std::string_view value) {
+ class DxcShaderCompiler::Impl {
+  public:
+   Impl() {
+-    HRESULT hr = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
++    HRESULT hr = DxcCreateInstance(CLSID_DxcUtils, kIidDxcUtils, receive(utils));
+     if (FAILED(hr)) {
+       error = "DxcCreateInstance(CLSID_DxcUtils) failed";
+       return;
+     }
+-    hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
++    hr = DxcCreateInstance(CLSID_DxcCompiler, kIidDxcCompiler3, receive(compiler));
+     if (FAILED(hr)) {
+       error = "DxcCreateInstance(CLSID_DxcCompiler) failed";
+       utils = nullptr;
+@@ -141,14 +166,14 @@ CompiledShader DxcShaderCompiler::compile(const LoweredShader& shader,
+   source.Encoding = DXC_CP_UTF8;
+   ComPtr<IDxcResult> result;
+   HRESULT hr = impl_->compiler->Compile(&source, args.data(),
+-      static_cast<UINT32>(args.size()), nullptr, IID_PPV_ARGS(&result));
++      static_cast<UINT32>(args.size()), nullptr, kIidDxcResult, receive(result));
+   if (FAILED(hr) || !result) {
+     output.diagnostics.emplace_back("IDxcCompiler3::Compile failed before producing a result");
+     return output;
+   }
+
+   ComPtr<IDxcBlobUtf8> errors;
+-  if (SUCCEEDED(result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr)) &&
++  if (SUCCEEDED(result->GetOutput(DXC_OUT_ERRORS, kIidDxcBlobUtf8, receive(errors), nullptr)) &&
+       errors && errors->GetStringLength()) {
+     output.diagnostics.emplace_back(errors->GetStringPointer(), errors->GetStringLength());
+   }
+@@ -156,7 +181,7 @@ CompiledShader DxcShaderCompiler::compile(const LoweredShader& shader,
+   if (FAILED(result->GetStatus(&status)) || FAILED(status)) return output;
+
+   ComPtr<IDxcBlob> object;
+-  if (FAILED(result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&object), nullptr)) || !object) {
++  if (FAILED(result->GetOutput(DXC_OUT_OBJECT, kIidDxcBlob, receive(object), nullptr)) || !object) {
+     output.diagnostics.emplace_back("DXC succeeded but returned no shader object");
+     return output;
+   }
