@@ -10,23 +10,6 @@ index 1b774a1..9003393 100644
  constexpr XResult Busy = 0x000000AAu;
  constexpr XResult NoSuchUser = 0x00000002u;
  constexpr XResult NotLoggedOn = 0x00000003u;
-diff --git a/include/xenon/xbox/xboxkrnl_ob_exports.hpp b/include/xenon/xbox/xboxkrnl_ob_exports.hpp
-index 0be0baf..a1e9f68 100644
---- a/include/xenon/xbox/xboxkrnl_ob_exports.hpp
-+++ b/include/xenon/xbox/xboxkrnl_ob_exports.hpp
-@@ -10,6 +10,12 @@ class KernelProcess;
- 
- namespace xenon::xbox {
- 
-+// ObOpenObjectByName (ordinal 0x10D / 269).
-+// Xbox ABI: r3 = OBJECT_ATTRIBUTES* (RootDirectory/ObjectName/Attributes),
-+// r4 = object type descriptor, r5 = access/parse context, r6 = HANDLE out.
-+[[nodiscard]] bool ob_open_object_by_name_export(kernel::KernelProcess& process,
-+                                                 core::ExportCallContext& context);
-+
- // ObReferenceObjectByHandle (ordinal 0x110 / 272).
- // Guest ABI: r3 = handle, r4 = object type descriptor guest pointer (0 = no
- // type check), r5 = guest pointer to receive the object's guest-visible
 diff --git a/include/xenon/xbox/xboxkrnl_xex_module_exports.hpp b/include/xenon/xbox/xboxkrnl_xex_module_exports.hpp
 index 62456b5..737df47 100644
 --- a/include/xenon/xbox/xboxkrnl_xex_module_exports.hpp
@@ -75,20 +58,6 @@ index 03cad2f..cfd45ea 100644
      core::ExportDescriptor proc_descriptor{};
      proc_descriptor.library = "xboxkrnl.exe";
      proc_descriptor.name = "XexGetProcedureAddress";
-diff --git a/src/core/session/exports/kernel_object_exports.cpp b/src/core/session/exports/kernel_object_exports.cpp
-index 9414559..22f1a71 100644
---- a/src/core/session/exports/kernel_object_exports.cpp
-+++ b/src/core/session/exports/kernel_object_exports.cpp
-@@ -109,6 +109,9 @@ bool XenonSession::register_kernel_object_exports() {
-          "pool/stack/heap/page-table/cache subdivisions zero because Memory V2 "
-          "does not attribute allocations to those hardware-specific buckets"},
-         {0x0C7u, "MmSetAddressProtect", &xbox::mm_set_address_protect_export},
-+        {0x10Du, "ObOpenObjectByName", &xbox::ob_open_object_by_name_export, true,
-+         "validates Xbox OBJECT_ATTRIBUTES/ANSI_STRING and returns the correct not-found status; "
-+         "named kernel-object namespace lookup is not implemented yet"},
-         {0x110u, "ObReferenceObjectByHandle", &xbox::ob_reference_object_by_handle_export},
-         {0x105u, "ObDereferenceObject", &xbox::ob_dereference_object_export},
-         {0x0DAu, "NtDuplicateObject", &xbox::nt_duplicate_object_export},
 diff --git a/src/xam/xam_content_exports.cpp b/src/xam/xam_content_exports.cpp
 index febc24c..b879243 100644
 --- a/src/xam/xam_content_exports.cpp
@@ -126,50 +95,6 @@ index febc24c..b879243 100644
    return ok;
  }
  
-diff --git a/src/xbox/exports/xboxkrnl_ob_exports.cpp b/src/xbox/exports/xboxkrnl_ob_exports.cpp
-index 1ab9a51..fb80ed0 100644
---- a/src/xbox/exports/xboxkrnl_ob_exports.cpp
-+++ b/src/xbox/exports/xboxkrnl_ob_exports.cpp
-@@ -29,6 +29,39 @@ constexpr Handle kCurrentThreadPseudoHandle = 0xFFFFFFFEu;
- 
- }  // namespace
- 
-+bool ob_open_object_by_name_export(kernel::KernelProcess&, ExportCallContext& context) {
-+  const auto attributes_ptr = static_cast<cpu::GuestAddress>(context.cpu.gpr[3]);
-+  const auto handle_out = static_cast<cpu::GuestAddress>(context.cpu.gpr[6]);
-+  if (attributes_ptr == 0u || handle_out == 0u) {
-+    context.cpu.gpr[3] = status::InvalidParameter;
-+    return true;
-+  }
-+
-+  // Xbox OBJECT_ATTRIBUTES is three BE32 fields. Validate the nested
-+  // ANSI_STRING as well, even though the current KernelProcess does not yet
-+  // expose a named-object directory to resolve it against.
-+  const auto name_ptr = context.memory.read32_be(attributes_ptr + 4u);
-+  if (name_ptr == 0u) {
-+    context.cpu.gpr[3] = status::ObjectNameInvalid;
-+    return true;
-+  }
-+  const auto name_length = context.memory.read16_be(name_ptr);
-+  const auto name_buffer = context.memory.read32_be(name_ptr + 4u);
-+  if (name_length == 0u || name_buffer == 0u) {
-+    context.cpu.gpr[3] = status::ObjectNameInvalid;
-+    return true;
-+  }
-+  // Touch the bounded name range so malformed guest pointers fail through
-+  // the runtime's normal MemoryFault path instead of looking like a miss.
-+  for (std::uint16_t i = 0u; i < name_length; ++i) {
-+    static_cast<void>(context.memory.read8(name_buffer + i));
-+  }
-+
-+  context.memory.write32_be(handle_out, 0u);
-+  context.cpu.gpr[3] = status::ObjectNameNotFound;
-+  return true;
-+}
-+
- bool ob_reference_object_by_handle_export(kernel::KernelProcess& process,
-                                           ExportCallContext& context) {
-   const auto handle = static_cast<Handle>(context.cpu.gpr[3]);
 diff --git a/src/xbox/exports/xboxkrnl_threading_exports.cpp b/src/xbox/exports/xboxkrnl_threading_exports.cpp
 index 970debd..940b36b 100644
 --- a/src/xbox/exports/xboxkrnl_threading_exports.cpp

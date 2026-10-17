@@ -4,6 +4,9 @@ param(
     [string]$OutputDirectory,
     [string]$XenonRoot,
     [string]$ToolBuildDirectory,
+    [string]$ObservationsPath,
+    [switch]$UseLatestObservations,
+    [switch]$UseAllObservations,
     [ValidateRange(1, 128)]
     [int]$Jobs = 8,
     [switch]$BuildModule
@@ -33,6 +36,42 @@ $hintsPath = Join-Path $repoRoot 'config/FNK.modern.hints'
 $materializedXex = Join-Path ([IO.Path]::GetDirectoryName($XexPath)) 'default.uncompressed.xex'
 $graphCache = Join-Path $OutputDirectory '.graph-windows-v2'
 $legacyXenonRoot = Join-Path $repoRoot 'tools/XenonRecomp'
+
+if (([int][bool]$ObservationsPath + [int][bool]$UseLatestObservations +
+        [int][bool]$UseAllObservations) -gt 1) {
+    throw 'Use only one of -ObservationsPath, -UseLatestObservations, or -UseAllObservations.'
+}
+$runtimeObservationFiles = @()
+if ($UseLatestObservations -or $UseAllObservations) {
+    $runtimeObservationFiles = @(Get-ChildItem (Join-Path $repoRoot 'artifacts/runtime-sessions') `
+        -Filter adaptive-observations.jsonl -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.Length -gt 0 } |
+        Sort-Object LastWriteTimeUtc -Descending)
+    if ($runtimeObservationFiles.Count -eq 0) {
+        throw 'No non-empty adaptive observation trace exists under artifacts/runtime-sessions.'
+    }
+}
+if ($UseLatestObservations) {
+    $ObservationsPath = $runtimeObservationFiles[0].FullName
+}
+if ($UseAllObservations) {
+    $feedbackDirectory = Join-Path $repoRoot 'artifacts/runtime-feedback'
+    $ObservationsPath = Join-Path $feedbackDirectory 'fruit-ninja-kinect.jsonl'
+    New-Item -ItemType Directory -Force -Path $feedbackDirectory | Out-Null
+    # The recomp-driver aggregates matching facts after parsing. Sorting and
+    # removing byte-identical records here keeps the cumulative feedback file
+    # deterministic and prevents repeated sessions from growing it needlessly.
+    $runtimeObservationFiles |
+        ForEach-Object { Get-Content -LiteralPath $_.FullName } |
+        Sort-Object -Unique |
+        Set-Content -LiteralPath $ObservationsPath -Encoding UTF8
+}
+if ($ObservationsPath) {
+    $ObservationsPath = [IO.Path]::GetFullPath($ObservationsPath)
+    if (-not (Test-Path -LiteralPath $ObservationsPath -PathType Leaf)) {
+        throw "Adaptive observation trace does not exist: $ObservationsPath"
+    }
+}
 
 foreach ($required in @($XexPath, $XenonRoot, $hintsPath)) {
     if (-not (Test-Path -LiteralPath $required)) {
@@ -177,8 +216,19 @@ if (-not (Test-Path -LiteralPath $driver)) {
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $savedErrorPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
-$driverOutput = & $driver $materializedXex $OutputDirectory --hints $hintsPath `
-    --graph-cache $graphCache --jobs $Jobs --allow-partial --quiet 2>&1
+$driverArguments = @(
+    $materializedXex,
+    $OutputDirectory,
+    '--hints', $hintsPath,
+    '--graph-cache', $graphCache,
+    '--jobs', $Jobs,
+    '--allow-partial',
+    '--quiet'
+)
+if ($ObservationsPath) {
+    $driverArguments += @('--observations', $ObservationsPath)
+}
+$driverOutput = & $driver @driverArguments 2>&1
 $driverExitCode = $LASTEXITCODE
 $ErrorActionPreference = $savedErrorPreference
 $driverOutput | Set-Content -LiteralPath (Join-Path $OutputDirectory 'generation-report.txt')
@@ -247,4 +297,7 @@ if ($BuildModule) {
 
 Write-Host "Modern generated project: $OutputDirectory"
 Write-Host "Runtime XEX: $materializedXex"
+if ($ObservationsPath) {
+    Write-Host "Adaptive observations: $ObservationsPath"
+}
 Write-Host 'NUI bridge injected into Xenon_BindCompiledRegistry.'
