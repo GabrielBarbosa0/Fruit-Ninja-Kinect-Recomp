@@ -1,0 +1,19 @@
+[main]
+# Paths are resolved relative to this file. Game data and generated output are
+# intentionally excluded from source control.
+file_path = "../artifacts/extracted/fruit-ninja-kinect/default.xex"
+out_directory_path = "../generated/ppc"
+switch_table_file_path = "../generated/analysis/FNK_switch_tables.toml"
+
+# Keep all optimizations disabled until the first correct native boot.
+skip_lr = false
+skip_msr = false
+ctr_as_local = false
+xer_as_local = false
+reserved_as_local = false
+cr_as_local = false
+non_argument_as_local = false
+non_volatile_as_local = false
+
+# The compiler helper addresses will be added after the decrypted image is
+# mapped and their byte patterns have been verified.
