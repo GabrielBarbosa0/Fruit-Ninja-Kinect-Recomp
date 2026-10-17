@@ -145,7 +145,8 @@ if(FNK_BUILD_XENON_RUNTIME_BRIDGE)
     # Only import the CPU and memory layers needed by AddressSpace. Importing
     # the runtime's root project would also build its launcher, recompiler and
     # preparation tools, none of which are dependencies of this bridge.
-    set(FNK_XENON_RUNTIME_ROOT "${CMAKE_SOURCE_DIR}/tools/Xenon-Recomp")
+    set(FNK_XENON_RUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/tools/Xenon-Recomp"
+        CACHE PATH "Path to the modern Xenon-Recomp source tree")
     if(NOT TARGET Xenon::Memory)
         set(XENON_SOURCE_DIR "${FNK_XENON_RUNTIME_ROOT}")
         set(XENON_ENABLE_MEMORY ON)
@@ -165,6 +166,7 @@ if(FNK_BUILD_XENON_RUNTIME_BRIDGE)
 
     add_library(fnk_nui_xenon_runtime STATIC
         src/nui/xenon_address_space_memory.cpp
+        src/nui/xenon_module_bridge.cpp
         src/nui/xenon_registry_overlay.cpp)
     target_include_directories(fnk_nui_xenon_runtime PUBLIC include)
     target_compile_features(fnk_nui_xenon_runtime PUBLIC cxx_std_20)

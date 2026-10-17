@@ -6,6 +6,7 @@
 
 #include "fnk/nui/dispatcher.hpp"
 #include "fnk/nui/xenon_address_space_memory.hpp"
+#include "fnk/nui/xenon_module_bridge.hpp"
 #include "fnk/nui/xenon_registry_overlay.hpp"
 #include "xenon/memory/address_space.hpp"
 
@@ -61,6 +62,19 @@ int main() {
       fnk::nui::xenon_address::kTextureLockRect)(context);
   if (!check(texture_fallback.reason == xenon::cpu::FlowReason::Return,
              "delegate LockRect for a non-NUI texture")) {
+    return 1;
+  }
+
+  xenon::cpu::CpuState module_cpu{};
+  xenon::cpu::ExecutionContext module_context{module_cpu, address_space, runtime};
+  module_context.compiled_lookup = &fallback_lookup;
+  if (!check(fnk::nui::bind_xenon_nui_module(module_context),
+             "bind reusable generated-module bridge") ||
+      !check(fnk::nui::xenon_nui_frame_store() != nullptr,
+             "expose module frame store to live producer") ||
+      !check(module_context.lookup_compiled(
+                 fnk::nui::xenon_address::kNuiInitialize) != &fallback_function,
+             "install module bridge lookup overlay")) {
     return 1;
   }
 
