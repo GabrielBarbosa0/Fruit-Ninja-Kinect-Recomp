@@ -30,6 +30,8 @@ $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $XenonRoot = [IO.Path]::GetFullPath($XenonRoot)
 $ToolBuildDirectory = [IO.Path]::GetFullPath($ToolBuildDirectory)
 $hintsPath = Join-Path $repoRoot 'config/FNK.modern.hints'
+$materializedXex = Join-Path ([IO.Path]::GetDirectoryName($XexPath)) 'default.uncompressed.xex'
+$graphCache = Join-Path $OutputDirectory '.graph-windows-v2'
 
 foreach ($required in @($XexPath, $XenonRoot, $hintsPath)) {
     if (-not (Test-Path -LiteralPath $required)) {
@@ -40,20 +42,38 @@ foreach ($required in @($XexPath, $XenonRoot, $hintsPath)) {
 # libc++ on Windows may expose file_time_type::rep as a wider integral type,
 # making std::to_string(count()) ambiguous. Keep the local runtime checkout
 # reproducible by applying our narrow portability patch exactly once.
-$compatPatch = Join-Path $repoRoot 'patches/xenon-recomp-llvm-mingw.patch'
+$compatPatches = @(
+    (Join-Path $repoRoot 'patches/xenon-recomp-llvm-mingw.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-llvm-mingw-dbghelp.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-windows-graph-promotion.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-legacy-hint-parser.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-partial-codegen.patch')
+)
 Push-Location $XenonRoot
 try {
-    & git apply --check $compatPatch 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        & git apply $compatPatch
-        if ($LASTEXITCODE -ne 0) { throw 'Failed to apply Xenon-Recomp compatibility patch.' }
-    } else {
-        & git apply --reverse --check $compatPatch 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Xenon-Recomp compatibility patch does not match this checkout.'
+    foreach ($compatPatch in $compatPatches) {
+        $savedErrorPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        & git apply --check $compatPatch 2>$null
+        $canApplyPatch = $LASTEXITCODE -eq 0
+        $ErrorActionPreference = $savedErrorPreference
+        if ($canApplyPatch) {
+            & git apply $compatPatch
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to apply Xenon-Recomp compatibility patch: $compatPatch"
+            }
+        } else {
+            $ErrorActionPreference = 'Continue'
+            & git apply --reverse --check $compatPatch 2>$null
+            $patchAlreadyApplied = $LASTEXITCODE -eq 0
+            $ErrorActionPreference = $savedErrorPreference
+            if (-not $patchAlreadyApplied) {
+                throw "Xenon-Recomp compatibility patch does not match this checkout: $compatPatch"
+            }
         }
     }
 } finally {
+    $ErrorActionPreference = 'Stop'
     Pop-Location
 }
 
@@ -68,6 +88,22 @@ if (-not $cmake -or -not $ninja -or -not $compiler) {
 }
 
 $env:Path = "$($compiler.Directory.FullName);$env:Path"
+
+$materializerBuild = Join-Path $repoRoot 'build/native-materializer'
+& $cmake.FullName -S $repoRoot -B $materializerBuild -G Ninja `
+    "-DCMAKE_MAKE_PROGRAM=$($ninja.FullName)" `
+    "-DCMAKE_CXX_COMPILER=$($compiler.FullName)" `
+    -DCMAKE_BUILD_TYPE=Release `
+    -DFNK_BUILD_TESTS=OFF `
+    -DFNK_BUILD_CAMERA=OFF `
+    -DFNK_BUILD_POSE=OFF `
+    -DFNK_BUILD_REVERSE_TOOLS=ON
+if ($LASTEXITCODE -ne 0) { throw 'Failed to configure the XEX materializer.' }
+& $cmake.FullName --build $materializerBuild --target fnk_xex_materialize -j $Jobs
+if ($LASTEXITCODE -ne 0) { throw 'Failed to build the XEX materializer.' }
+& (Join-Path $materializerBuild 'fnk_xex_materialize.exe') $XexPath $materializedXex
+if ($LASTEXITCODE -ne 0) { throw 'Failed to materialize the uncompressed XEX.' }
+
 & $cmake.FullName -S $XenonRoot -B $ToolBuildDirectory -G Ninja `
     "-DCMAKE_MAKE_PROGRAM=$($ninja.FullName)" `
     "-DCMAKE_CXX_COMPILER=$($compiler.FullName)" `
@@ -97,9 +133,28 @@ if (-not (Test-Path -LiteralPath $driver)) {
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-& $driver $XexPath $OutputDirectory --hints $hintsPath --jobs $Jobs 2>&1 |
-    Tee-Object -FilePath (Join-Path $OutputDirectory 'generation-report.txt')
-if ($LASTEXITCODE -ne 0) { throw 'Modern recompilation source generation failed.' }
+$savedErrorPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$driverOutput = & $driver $materializedXex $OutputDirectory --hints $hintsPath `
+    --graph-cache $graphCache --jobs $Jobs --allow-partial --quiet 2>&1
+$driverExitCode = $LASTEXITCODE
+$ErrorActionPreference = $savedErrorPreference
+$driverOutput | Set-Content -LiteralPath (Join-Path $OutputDirectory 'generation-report.txt')
+$generationStatusPath = Join-Path $OutputDirectory 'generation-status.json'
+$generationComplete = $false
+if (Test-Path -LiteralPath $generationStatusPath) {
+    $generationComplete = [bool]((Get-Content -LiteralPath $generationStatusPath -Raw | ConvertFrom-Json).complete)
+}
+# recomp-driver deliberately returns a nonzero status when the report still
+# contains unresolved sites. In --allow-partial mode those sites are handed
+# to the runtime fallback; generation-status.json is the authoritative signal
+# that the transactional project emission itself completed.
+if ($driverExitCode -ne 0 -and -not $generationComplete) {
+    throw 'Modern recompilation source generation failed.'
+}
+if ($driverExitCode -ne 0) {
+    Write-Host "Generated partial module; unresolved guest sites remain for runtime fallback."
+}
 
 $moduleExportPath = Join-Path $OutputDirectory 'module_export.cpp'
 $generatedCmakePath = Join-Path $OutputDirectory 'CMakeLists.txt'
@@ -149,4 +204,5 @@ if ($BuildModule) {
 }
 
 Write-Host "Modern generated project: $OutputDirectory"
+Write-Host "Runtime XEX: $materializedXex"
 Write-Host 'NUI bridge injected into Xenon_BindCompiledRegistry.'

@@ -1,0 +1,32 @@
+diff --git a/src/recomp/compilation/graph/compilation_graph.cpp b/src/recomp/compilation/graph/compilation_graph.cpp
+--- a/src/recomp/compilation/graph/compilation_graph.cpp
++++ b/src/recomp/compilation/graph/compilation_graph.cpp
+@@ -163,6 +163,28 @@ Result Store::publish(const Node& node, std::string bytes) const {
+     std::error_code ec; std::filesystem::rename(stage,final,ec);
+     if(ec) {
+       if(auto hit=lookup(node)) { std::filesystem::remove_all(stage); return *hit; }
++#if defined(_WIN32)
++      // Some LLVM-MinGW/Windows combinations reject directory rename across
++      // sibling cache directories with ERROR_ACCESS_DENIED. Publish the
++      // payload first and manifest last so readers still never observe a
++      // verified partial entry.
++      if (!std::filesystem::exists(final)) {
++        ec.clear();
++        std::filesystem::create_directory(final, ec);
++        if (!ec) std::filesystem::copy_file(stage/"payload", final/"payload",
++                                             std::filesystem::copy_options::none, ec);
++        if (!ec) std::filesystem::copy_file(stage/"manifest.json", final/"manifest.json",
++                                             std::filesystem::copy_options::none, ec);
++        if (!ec) {
++          std::error_code stage_cleanup_ec;
++          std::filesystem::remove_all(stage, stage_cleanup_ec);
++          if (auto published = lookup(node)) return *published;
++          throw std::runtime_error("graph copied promotion verification failed");
++        }
++        std::error_code cleanup_ec;
++        std::filesystem::remove_all(final, cleanup_ec);
++      }
++#endif
+       // Never replace a corrupt entry in place: readers must not observe a
+       // partially repaired entry. Quarantine it, then try atomic promotion.
+       auto quarantine=root_/"staging"/(stage.filename().string()+"-corrupt");

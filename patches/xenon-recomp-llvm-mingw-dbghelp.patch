@@ -1,0 +1,11 @@
+diff --git a/src/cpu/CMakeLists.txt b/src/cpu/CMakeLists.txt
+--- a/src/cpu/CMakeLists.txt
++++ b/src/cpu/CMakeLists.txt
+@@ -51,4 +51,7 @@ if(MSVC)
+   # default constexpr evaluation step budget (1,048,576).
+   target_compile_options(xenon_cpu PRIVATE /constexpr:steps100000000)
+ endif()
++if(WIN32)
++  target_link_libraries(xenon_cpu PUBLIC dbghelp)
++endif()
+ add_library(Xenon::CPU ALIAS xenon_cpu)

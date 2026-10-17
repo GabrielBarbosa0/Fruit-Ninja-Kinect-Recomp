@@ -1,0 +1,13 @@
+diff --git a/src/recomp/compilation/graph/compilation_graph.cpp b/src/recomp/compilation/graph/compilation_graph.cpp
+--- a/src/recomp/compilation/graph/compilation_graph.cpp
++++ b/src/recomp/compilation/graph/compilation_graph.cpp
+@@ -104,7 +104,8 @@ std::string preparation_identity(const std::filesystem::path& source_root,
+       if (!e.is_regular_file()) continue;
+       files["metadata:" + e.path().generic_string()] =
+           std::to_string(e.file_size()) + ":" +
+-          std::to_string(e.last_write_time().time_since_epoch().count());
++          std::to_string(static_cast<std::int64_t>(
++              e.last_write_time().time_since_epoch().count()));
+     }
+   };
+   for (const auto* dir : {"include", "src", "cmake"}) add_tree(source_root / dir);

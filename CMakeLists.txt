@@ -184,6 +184,19 @@ if(FNK_BUILD_REVERSE_TOOLS)
     set(FNK_XENON_ROOT "${CMAKE_SOURCE_DIR}/tools/XenonRecomp")
     set(FNK_XENON_BUILD "${FNK_XENON_ROOT}/build-fnk2")
     if(EXISTS "${FNK_XENON_BUILD}/XenonUtils/libXenonUtils.a")
+        add_executable(fnk_xex_materialize apps/fnk_xex_materialize.cpp)
+        target_compile_features(fnk_xex_materialize PRIVATE cxx_std_20)
+        target_include_directories(fnk_xex_materialize PRIVATE
+            "${FNK_XENON_ROOT}/XenonUtils"
+            "${FNK_XENON_ROOT}/thirdparty/disasm"
+            "${FNK_XENON_ROOT}/thirdparty/simde"
+            "${FNK_XENON_ROOT}/thirdparty/TinySHA1"
+        )
+        target_link_libraries(fnk_xex_materialize PRIVATE
+            "${FNK_XENON_BUILD}/XenonUtils/libXenonUtils.a"
+            "${FNK_XENON_BUILD}/thirdparty/disasm/libdisasm.a"
+        )
+
         add_executable(fnk_nui_abi_probe analysis/nui_abi_probe.cpp)
         target_compile_features(fnk_nui_abi_probe PRIVATE cxx_std_20)
         target_include_directories(fnk_nui_abi_probe PRIVATE

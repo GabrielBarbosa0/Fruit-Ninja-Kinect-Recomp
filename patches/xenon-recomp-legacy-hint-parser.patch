@@ -1,0 +1,29 @@
+diff --git a/src/recomp/hints/module_hints.cpp b/src/recomp/hints/module_hints.cpp
+index 5f43452..c13c7d0 100644
+--- a/src/recomp/hints/module_hints.cpp
++++ b/src/recomp/hints/module_hints.cpp
+@@ -43,12 +43,18 @@ bool load_hints(const DriverOptions& options, std::vector<ModuleHint>& hints, std
+     const auto key = line.substr(0, separator);
+     const auto value = line.substr(separator + 1);
+     if (key == "name") hint.name = value;
+-    else if (key == "function_boundaries" && !parse_address_list(value, hint.function_boundaries))
+-      error = "invalid function_boundaries hint";
+-    else if (key == "data_regions" && !parse_address_list(value, hint.data_regions))
+-      error = "invalid data_regions hint";
+-    else if (key == "ignored_regions" && !parse_address_list(value, hint.ignored_regions))
+-      error = "invalid ignored_regions hint";
++    else if (key == "function_boundaries") {
++      if (!parse_address_list(value, hint.function_boundaries))
++        error = "invalid function_boundaries hint";
++    }
++    else if (key == "data_regions") {
++      if (!parse_address_list(value, hint.data_regions))
++        error = "invalid data_regions hint";
++    }
++    else if (key == "ignored_regions") {
++      if (!parse_address_list(value, hint.ignored_regions))
++        error = "invalid ignored_regions hint";
++    }
+     else if (key == "known_symbols") {
+       const auto at = value.find('@');
+       if (at == std::string::npos) {

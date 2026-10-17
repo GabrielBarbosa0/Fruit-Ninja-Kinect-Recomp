@@ -1,3 +1,15 @@
 name=FruitNinjaKinect
-function_boundaries=0x821B3720,0x821B3870,0x821C2918,0x821C3120,0x821C3448,0x821C3CC0,0x8220E580,0x8220FFD0
-known_symbols=NuiSkeletonTrackingEnable@0x821B3720,NuiSkeletonGetNextFrame@0x821B3870,NuiInitialize@0x821C2918,NuiImageStreamGetNextFrame@0x821C3120,NuiImageStreamReleaseFrame@0x821C3448,NuiImageStreamOpen@0x821C3CC0,TextureUnlockRect@0x8220E580,TextureLockRect@0x8220FFD0
+# The wrappers at 0x823B5970 and 0x823B59A8 end in known no-return calls.
+# Their following words are zero padding, so stop each scan before padding.
+function_boundaries=0x823B5970,0x823B59A4,0x823B59A8,0x823B59DC
+known_symbols=NuiSkeletonTrackingEnable@0x821B3720
+known_symbols=NuiSkeletonGetNextFrame@0x821B3870
+known_symbols=NuiInitialize@0x821C2918
+known_symbols=NuiImageStreamGetNextFrame@0x821C3120
+known_symbols=NuiImageStreamReleaseFrame@0x821C3448
+known_symbols=NuiImageStreamOpen@0x821C3CC0
+known_symbols=TextureUnlockRect@0x8220E580
+known_symbols=TextureLockRect@0x8220FFD0
+# Cross-region tail target recovered by the modern analyzer. Publishing it as
+# a semantic entry makes the non-linked transfer from 0x82161F54 dispatchable.
+known_symbols=fn_823B5970@0x823B5970

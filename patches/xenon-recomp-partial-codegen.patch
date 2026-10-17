@@ -1,0 +1,98 @@
+diff --git a/src/recomp/analysis/validation/codegen_validation.cpp b/src/recomp/analysis/validation/codegen_validation.cpp
+index 87ce0ab..e34cb78 100644
+--- a/src/recomp/analysis/validation/codegen_validation.cpp
++++ b/src/recomp/analysis/validation/codegen_validation.cpp
+@@ -91,7 +91,8 @@ bool validate_codegen_uniqueness(const std::vector<const DiscoveredFunction*>& c
+ }
+ 
+ bool validate_codegen_control_flow(const std::vector<const DiscoveredFunction*>& functions,
+-                                   const AnalysisReport& report, std::string& error) {
++                                   const AnalysisReport& report, bool allow_partial,
++                                   std::string& error) {
+   std::set<GuestAddress> dispatchable_entries;
+   for (const auto& entry : report.entries) dispatchable_entries.insert(entry.address);
+ 
+@@ -100,6 +101,11 @@ bool validate_codegen_control_flow(const std::vector<const DiscoveredFunction*>&
+       for (const auto& edge : block.successors) {
+         if (edge.local || edge.kind == cpu::ir::EdgeKind::Call) continue;
+         if (dispatchable_entries.contains(edge.target)) continue;
++        // Partial projects intentionally hand unresolved external branches
++        // back to the runtime. CppAotBackend already emits this as a
++        // FlowReason::Branch, allowing lookup/dynamic fallback to decide
++        // whether to translate or trap at the target.
++        if (allow_partial) continue;
+         error = "codegen: direct " +
+                 std::string(edge.kind == cpu::ir::EdgeKind::Fallthrough ? "fallthrough" : "branch") +
+                 " from guest function 0x" + hex_string(function->guest_start) +
+@@ -113,7 +119,7 @@ bool validate_codegen_control_flow(const std::vector<const DiscoveredFunction*>&
+ }
+ 
+ bool validate_region_entry_integrity(const AnalysisReport& report,
+-                                     AnalysisDiagnostics& diagnostics,
++                                     AnalysisDiagnostics& diagnostics, bool allow_partial,
+                                      std::string& error) {
+   std::unordered_map<GuestAddress, const DiscoveredFunction*> functions_by_start;
+   functions_by_start.reserve(report.functions.size());
+@@ -167,6 +173,7 @@ bool validate_region_entry_integrity(const AnalysisReport& report,
+       ++diagnostics.entry_integrity_checks;
+       if (owns_address(function, branch.target)) continue;
+       if (entries.contains(branch.target)) continue;
++      if (allow_partial) continue;
+       ++diagnostics.entry_integrity_failures;
+       error = "entry-integrity: control-flow edge 0x" + hex_string(branch.site) +
+               " -> 0x" + hex_string(branch.target) +
+diff --git a/src/recomp/analysis/validation/codegen_validation.hpp b/src/recomp/analysis/validation/codegen_validation.hpp
+index 8f1c0b5..f90dfc1 100644
+--- a/src/recomp/analysis/validation/codegen_validation.hpp
++++ b/src/recomp/analysis/validation/codegen_validation.hpp
+@@ -15,9 +15,10 @@ bool validate_codegen_uniqueness(const std::vector<const DiscoveredFunction*>& c
+                                  const AnalysisReport& report, AnalysisDiagnostics& diagnostics,
+                                  std::string& error);
+ bool validate_codegen_control_flow(const std::vector<const DiscoveredFunction*>& functions,
+-                                   const AnalysisReport& report, std::string& error);
++                                   const AnalysisReport& report, bool allow_partial,
++                                   std::string& error);
+ bool validate_region_entry_integrity(const AnalysisReport& report,
+-                                     AnalysisDiagnostics& diagnostics,
++                                     AnalysisDiagnostics& diagnostics, bool allow_partial,
+                                      std::string& error);
+ 
+ }  // namespace xenon::recomp::detail
+diff --git a/src/recomp/driver/project_generation.cpp b/src/recomp/driver/project_generation.cpp
+index c6ce436..19251dc 100644
+--- a/src/recomp/driver/project_generation.cpp
++++ b/src/recomp/driver/project_generation.cpp
+@@ -59,9 +59,9 @@ bool generate_project(const DriverOptions& options, AnalysisReport& report, std:
+ 
+   if (!validate_codegen_uniqueness(codegen_items, report, report.diagnostics, error))
+     return fail_generation("entry-uniqueness");
+-  if (!validate_region_entry_integrity(report, report.diagnostics, error))
++  if (!validate_region_entry_integrity(report, report.diagnostics, options.allow_partial, error))
+     return fail_generation("entry-integrity");
+-  if (!validate_codegen_control_flow(codegen_items, report, error))
++  if (!validate_codegen_control_flow(codegen_items, report, options.allow_partial, error))
+     return fail_generation("control-flow");
+   write_generation_status(false, "codegen", {});
+ 
+diff --git a/tools/recomp_tools.cpp b/tools/recomp_tools.cpp
+index adeee5f..024c25d 100644
+--- a/tools/recomp_tools.cpp
++++ b/tools/recomp_tools.cpp
+@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
+                    "[--module <module-directory>] [--observations <adaptive-observations.jsonl>] "
+                    "[--graph-cache <directory>] [--knowledge <knowledge.jsonl>] [--knowledge-export <knowledge.jsonl>] "
+                    "[--knowledge-min-score N] [--no-knowledge-seed] "
+-                   "[--jobs auto|N] [--quiet] [--json]\n"
++                   "[--jobs auto|N] [--allow-partial] [--quiet] [--json]\n"
+                    "  --module points at an installed Project Gracemeria module package\n"
+                    "  (manifest.json + revisions/<effective-image-hash>/analysis.json - see\n"
+                    "  docs/recomp/ANALYSIS_HINT_SCHEMA_V2.md). The Recomp Driver selects and validates\n"
+@@ -178,6 +178,8 @@ int main(int argc, char** argv) {
+       }
+     } else if (std::string(argv[index]) == "--no-knowledge-seed") {
+       options.enable_knowledge_seeding = false;
++    } else if (std::string(argv[index]) == "--allow-partial") {
++      options.allow_partial = true;
+     } else if (std::string(argv[index]) == "--jobs" && index + 1 < argc) {
+       // Part 3/16: shared --jobs flag controls both analysis and codegen
+       // worker counts. "auto" leaves both at their DriverOptions default

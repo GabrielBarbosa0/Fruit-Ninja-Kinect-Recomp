@@ -35,6 +35,9 @@ by Git.
   CPU V2 compiled-registry overlay for all eight recovered NUI/texture entry
   points. Unrelated compiled functions and real textures still fall through to
   the generated game registry.
+- The owned XEX can now be materialized into the uncompressed form accepted by
+  the modern loader, analyzed into 17,000 native functions/133 C++ shards, and
+  built as a 64-bit `xenon_game_module` DLL with the NUI overlay injected.
 - A Windows Media Foundation backend now enumerates real cameras and captures
   BGRA8 frames on a worker thread. It has been exercised with a physical USB
   webcam at 640x480.
@@ -82,6 +85,22 @@ cmake -S . -B build/native-xenon -G Ninja `
 cmake --build build/native-xenon --target fnk_xenon_memory_probe
 .\build\native-xenon\fnk_xenon_memory_probe.exe
 ```
+
+## Generate the modern recompiled module
+
+With the extracted owned `default.xex` in its normal artifact directory, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Generate-ModernModule.ps1 `
+    -Jobs 8 -BuildModule
+```
+
+The script applies the tracked Xenon-Recomp compatibility patches, creates an
+ignored `default.uncompressed.xex` without modifying the original dump,
+generates the partial AOT project, injects the webcam-to-NUI registry overlay,
+and builds `artifacts/generated-modern/build/libxenon_game_module.dll`.
+Unresolved indirect sites remain available to Xenon's runtime fallback; the
+full host/VFS boot path is still the next integration milestone.
 
 ## Test a real webcam
 
@@ -135,4 +154,3 @@ supported:
 The ignored profile can be loaded by `SkeletonMapper` to express joints in
 metres relative to the calibrated horizontal center and floor. See
 [docs/GAME_SPACE_CALIBRATION.md](docs/GAME_SPACE_CALIBRATION.md).
-
