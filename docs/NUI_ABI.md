@@ -111,3 +111,33 @@ with 13 depth bits and a 3-bit player index, at 320 x 240.
 The executable representation of these layouts lives in
 `include/fnk/nui/guest_abi.hpp`; compile-time assertions prevent accidental ABI
 drift.
+
+## Native dispatcher and XenonRecomp hooks
+
+`NuiDispatcher` implements the recovered entry points against an abstract
+`GuestMemory` mapping. `FlatGuestMemory` adapts XenonRecomp's `base + guestAddress`
+model and allocates image frames, synthetic texture tokens, and pixel storage
+from a runtime-reserved scratch arena.
+
+`src/nui/xenon_hooks.cpp` overrides these weak XenonRecomp symbols:
+
+| Guest address | Override |
+|---:|---|
+| `0x821C2918` | initialize |
+| `0x821B3720` | enable skeleton tracking |
+| `0x821B3870` | get skeleton frame |
+| `0x821C3CC0` | open image stream |
+| `0x821C3120` | get image frame |
+| `0x821C3448` | release image frame |
+| `0x8220FFD0` | lock synthetic texture rectangle |
+| `0x8220E580` | unlock synthetic texture rectangle |
+
+The texture overrides first check whether the pointer belongs to the NUI
+dispatcher. All other textures are forwarded to XenonRecomp's retained
+`__imp__sub_*` implementation, so ordinary game and renderer textures are not
+affected.
+
+Skeleton and depth/player streams are operational. Color stream lifecycle is
+recognized, but frame publication intentionally returns `E_NUI_FRAME_NO_DATA`
+until the Xbox linear X8R8G8B8 byte order is verified. This avoids silently
+feeding channel-swapped images to the title.

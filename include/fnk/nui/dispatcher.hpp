@@ -35,6 +35,7 @@ class NuiDispatcher {
                                    guest::Address rectangle,
                                    std::uint32_t flags);
   guest::HResult texture_unlock_rect(guest::Address texture, std::uint32_t level);
+  bool owns_texture(guest::Address texture);
 
   void shutdown();
 

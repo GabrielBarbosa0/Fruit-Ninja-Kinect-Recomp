@@ -6,10 +6,12 @@ option(FNK_BUILD_TESTS "Build the native compatibility-layer tests" ON)
 option(FNK_BUILD_CAMERA "Build the Windows webcam capture backend" ON)
 option(FNK_BUILD_POSE "Build the ONNX MoveNet pose-estimation backend" ON)
 option(FNK_BUILD_REVERSE_TOOLS "Build local XEX reverse-engineering probes" OFF)
+option(FNK_BUILD_XENON_HOOKS "Build NUI overrides against generated XenonRecomp output" OFF)
 
 add_library(fnk_nui STATIC
     src/nui/depth_synthesizer.cpp
     src/nui/dispatcher.cpp
+    src/nui/flat_guest_memory.cpp
     src/nui/frame_store.cpp
     src/nui/game_space_calibration.cpp
     src/nui/guest_marshaller.cpp
@@ -108,6 +110,33 @@ if(FNK_BUILD_TESTS)
     target_compile_features(fnk_nui_tests PRIVATE cxx_std_20)
 
     add_test(NAME fnk_nui_tests COMMAND fnk_nui_tests)
+
+    # Compile the PPC hook translation unit against XenonRecomp's real context
+    # definition even before a complete game-code generation is available.
+    add_library(fnk_xenon_hook_compile_test STATIC src/nui/xenon_hooks.cpp)
+    target_compile_features(fnk_xenon_hook_compile_test PRIVATE cxx_std_20)
+    target_compile_definitions(fnk_xenon_hook_compile_test PRIVATE PPC_CONFIG_H_INCLUDED)
+    target_include_directories(fnk_xenon_hook_compile_test PRIVATE
+        include
+        tools/XenonRecomp/XenonUtils
+        tools/XenonRecomp/thirdparty/simde
+    )
+    target_link_libraries(fnk_xenon_hook_compile_test PRIVATE fnk_nui)
+endif()
+
+if(FNK_BUILD_XENON_HOOKS)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/generated/ppc/ppc_context.h")
+        add_library(fnk_xenon_nui_hooks STATIC src/nui/xenon_hooks.cpp)
+        target_compile_features(fnk_xenon_nui_hooks PRIVATE cxx_std_20)
+        target_include_directories(fnk_xenon_nui_hooks PRIVATE
+            include
+            generated/ppc
+            tools/XenonRecomp/thirdparty/simde
+        )
+        target_link_libraries(fnk_xenon_nui_hooks PUBLIC fnk_nui)
+    else()
+        message(FATAL_ERROR "Generate generated/ppc before enabling FNK_BUILD_XENON_HOOKS.")
+    endif()
 endif()
 
 if(FNK_BUILD_REVERSE_TOOLS)

@@ -224,6 +224,11 @@ guest::HResult NuiDispatcher::texture_unlock_rect(guest::Address texture,
                                                         : guest::kEInvalidArgument;
 }
 
+bool NuiDispatcher::owns_texture(guest::Address texture) {
+  std::lock_guard lock(mutex_);
+  return find_texture(texture) != nullptr;
+}
+
 void NuiDispatcher::shutdown() {
   std::lock_guard lock(mutex_);
   for (Stream& stream : streams_) {

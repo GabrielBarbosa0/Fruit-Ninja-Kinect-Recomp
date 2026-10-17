@@ -25,6 +25,11 @@ struct FunctionRange {
   std::uint32_t size{};
 };
 
+struct BytePattern {
+  std::string_view name;
+  std::vector<std::uint8_t> bytes;
+};
+
 std::string lower(std::string_view value) {
   std::string result(value);
   std::transform(result.begin(), result.end(), result.begin(), [](unsigned char character) {
@@ -215,6 +220,33 @@ std::set<std::uint32_t> find_direct_callers(
   return result;
 }
 
+void find_compiler_helpers(const Image& image) {
+  const std::vector<BytePattern> patterns{
+      {"restgprlr_14", {0xE9, 0xC1, 0xFF, 0x68}},
+      {"savegprlr_14", {0xF9, 0xC1, 0xFF, 0x68}},
+      {"restfpr_14", {0xC9, 0xCC, 0xFF, 0x70}},
+      {"savefpr_14", {0xD9, 0xCC, 0xFF, 0x70}},
+      {"restvmx_14", {0x39, 0x60, 0xFE, 0xE0, 0x7D, 0xCB, 0x60, 0xCE}},
+      {"savevmx_14", {0x39, 0x60, 0xFE, 0xE0, 0x7D, 0xCB, 0x61, 0xCE}},
+      {"restvmx_64", {0x39, 0x60, 0xFC, 0x00, 0x10, 0x0B, 0x60, 0xCB}},
+      {"savevmx_64", {0x39, 0x60, 0xFC, 0x00, 0x10, 0x0B, 0x61, 0xCB}},
+  };
+  for (const BytePattern& pattern : patterns) {
+    for (const Section& section : image.sections) {
+      if ((section.flags & SectionFlags_Code) == 0) {
+        continue;
+      }
+      const std::size_t size = mapped_size(image, section);
+      const auto found = std::search(section.data, section.data + size,
+                                     pattern.bytes.begin(), pattern.bytes.end());
+      if (found != section.data + size) {
+        std::cout << "HELPER " << pattern.name << " 0x" << std::hex << std::uppercase
+                  << section.base + static_cast<std::size_t>(found - section.data) << '\n';
+      }
+    }
+  }
+}
+
 void disassemble_function(const Image& image, const FunctionRange& function) {
   const auto* code = static_cast<const std::uint32_t*>(image.Find(function.begin));
   std::cout << "\nFUNCTION 0x" << std::hex << std::uppercase << function.begin << " size 0x"
@@ -264,6 +296,7 @@ int main(int argc, char** argv) {
     std::cout << "SECTION " << section.name << " base=0x" << section.base << " size=0x"
               << section.size << " flags=" << static_cast<unsigned>(section.flags) << '\n';
   }
+  find_compiler_helpers(image);
 
   std::vector<std::string> needles;
   std::vector<std::uint32_t> requested_addresses;

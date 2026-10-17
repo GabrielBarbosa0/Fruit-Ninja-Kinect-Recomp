@@ -47,9 +47,10 @@ segmentation mask when available.
 
 ## Remaining integration boundaries
 
-1. Wire the recovered big-endian layouts from `guest_abi.hpp` into the
-   recompiled guest-memory read/write boundary.
-2. The NUI identity and database containers must be mounted through the title
+1. Reserve and commit a scratch arena in the native runtime, then bind
+   `FlatGuestMemory`, `NuiDispatcher`, and the generated XenonRecomp hooks.
+2. Verify the Xbox linear X8R8G8B8 channel order and publish webcam color frames.
+3. The NUI identity and database containers must be mounted through the title
    VFS before NUI initialization.
-3. Multiple detected people need stable tracking IDs and Kinect player indices
+4. Multiple detected people need stable tracking IDs and Kinect player indices
    from 1 through 6; gameplay prioritizes the first two skeletons.

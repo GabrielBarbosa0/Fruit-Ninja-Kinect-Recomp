@@ -15,5 +15,13 @@ cr_as_local = false
 non_argument_as_local = false
 non_volatile_as_local = false
 
-# The compiler helper addresses will be added after the decrypted image is
-# mapped and their byte patterns have been verified.
+# Compiler save/restore fallthrough helpers, recovered from the decrypted XEX
+# using XenonRecomp's documented instruction signatures.
+restgprlr_14_address = 0x823B8740
+savegprlr_14_address = 0x823B86F0
+restfpr_14_address = 0x823B973C
+savefpr_14_address = 0x823B96F0
+restvmx_14_address = 0x823B9A28
+savevmx_14_address = 0x823B9790
+restvmx_64_address = 0x823B9ABC
+savevmx_64_address = 0x823B9824

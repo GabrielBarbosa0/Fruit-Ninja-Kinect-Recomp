@@ -29,6 +29,8 @@ by Git.
   synthesizes a packed 320x240 depth/player-index silhouette.
 - The exact big-endian NUI layouts, function signatures, and stream parameters
   used by the title have been recovered and encoded as compile-time-checked types.
+- Native overrides now dispatch skeleton and depth/player frames through the
+  recovered calls and synthetic `LockRect` textures into Xenon guest memory.
 - A Windows Media Foundation backend now enumerates real cameras and captures
   BGRA8 frames on a worker thread. It has been exercised with a physical USB
   webcam at 640x480.
