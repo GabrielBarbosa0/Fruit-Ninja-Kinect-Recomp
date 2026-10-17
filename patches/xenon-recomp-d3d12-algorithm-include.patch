@@ -1,0 +1,12 @@
+diff --git a/src/graphics/d3d12/depth_target.cpp b/src/graphics/d3d12/depth_target.cpp
+index 2342a81..d5489fd 100644
+--- a/src/graphics/d3d12/depth_target.cpp
++++ b/src/graphics/d3d12/depth_target.cpp
+@@ -1,5 +1,6 @@
+ #include "xenon/gpu/d3d12/depth_target.hpp"
+ 
++#include <algorithm>
+ #include <array>
+ #include <cstring>
+ #include <span>
+

@@ -99,12 +99,11 @@ The script applies the tracked Xenon-Recomp compatibility patches, creates an
 ignored `default.uncompressed.xex` without modifying the original dump,
 generates the partial AOT project, injects the webcam-to-NUI registry overlay,
 and builds `artifacts/generated-modern/build/libxenon_game_module.dll`.
-Unresolved indirect sites remain available to Xenon's runtime fallback; the
-full host/VFS boot path is still the next integration milestone.
+Unresolved indirect sites remain available to Xenon's runtime fallback.
 
 ### First runtime boot
 
-Build the ABI-compatible Xenon host and run a bounded headless boot probe:
+Build the ABI-compatible Xenon host and run a bounded visual boot probe:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Build-RuntimeHost.ps1 -Jobs 8
@@ -113,11 +112,19 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Start-FruitNinja.ps1 -Observe
 
 The launcher passes `default.uncompressed.xex` as a loose executable, mounts
 the surrounding extracted directory as `game:/`, binds
-`libxenon_game_module.dll`, and starts the recovered entry point. Each run
+`libxenon_game_module.dll`, creates a 1280x720 SDL2/D3D12 window, and starts
+the recovered entry point. Pass `-Headless` to hide the window or
+`-Renderer None` for the former GPU-less regression path. Each run
 writes inspectable `status.json`, `log.txt`, and diagnostic reports beneath
 `artifacts/runtime-sessions/`. Use `-KeepRunning` only after a boot survives
 the observation window; the default sends `stop.signal` so probes do not
 leave a background runtime behind.
+
+The current visual path reaches D3D12 command submission, but the first game
+frame is not complete yet. DXC shader compilation is disabled on LLVM-MinGW
+until the `dxcapi` UUID linkage is made compatible, and the guest currently
+leaves the front-buffer address unset. Audio is also disabled because the
+committed FFmpeg/XMA import libraries target the MSVC runtime.
 
 ## Test a real webcam
 

@@ -1,0 +1,81 @@
+diff --git a/src/graphics/d3d12/backend.cpp b/src/graphics/d3d12/backend.cpp
+index c16b134..bea3b0e 100644
+--- a/src/graphics/d3d12/backend.cpp
++++ b/src/graphics/d3d12/backend.cpp
+@@ -213,6 +213,7 @@ class Backend::Impl : public detail::BackendCore<Backend::Impl, BackendApi> {
+                                draw.color_count ? rtvs.data() : nullptr, FALSE,
+                                draw.depth ? &dsv : nullptr);
+       if (draw.depth && draw.state.depth_target.stencil_enabled) {
++#if !defined(__MINGW32__)
+         Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList8> list8;
+         if (draw.state.depth_target.backface_stencil_enabled &&
+             SUCCEEDED(list->QueryInterface(IID_PPV_ARGS(&list8)))) {
+@@ -222,6 +223,12 @@ class Backend::Impl : public detail::BackendCore<Backend::Impl, BackendApi> {
+         } else {
+           list->OMSetStencilRef(draw.state.depth_target.stencil_reference);
+         }
++#else
++        // llvm-mingw's Windows headers currently stop before command-list 8.
++        // The base command list still supports the common single-reference
++        // path used by older D3D12 runtimes.
++        list->OMSetStencilRef(draw.state.depth_target.stencil_reference);
++#endif
+       }
+       list->IASetPrimitiveTopology(draw.pipeline.native_topology());
+       if (draw.batch.indexed) {
+diff --git a/src/graphics/d3d12/pipeline.cpp b/src/graphics/d3d12/pipeline.cpp
+index ed3a5bf..b89ee76 100644
+--- a/src/graphics/d3d12/pipeline.cpp
++++ b/src/graphics/d3d12/pipeline.cpp
+@@ -18,6 +18,7 @@ struct alignas(void*) PipelineSubobject {
+   T value{};
+ };
+ 
++#if !defined(__MINGW32__)
+ struct GraphicsPipelineStream {
+   PipelineSubobject<ID3D12RootSignature*,
+                     D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE> root;
+@@ -68,6 +69,7 @@ bool independent_stencil_masks_supported(ID3D12Device* device) {
+              D3D12_FEATURE_D3D12_OPTIONS14, &options, sizeof(options))) &&
+          options.IndependentFrontAndBackStencilRefMaskSupported;
+ }
++#endif
+ 
+ std::string failure_text(const char* call, HRESULT result) {
+   char code[16]{};
+@@ -161,6 +163,7 @@ D3D12_DEPTH_STENCILOP_DESC native_stencil_face(const StencilFaceState& face) {
+           native_stencil(face.depth_pass), native_compare(face.function)};
+ }
+ 
++#if !defined(__MINGW32__)
+ D3D12_DEPTH_STENCILOP_DESC1 native_stencil_face(
+     const StencilFaceState& face, std::uint8_t read_mask,
+     std::uint8_t write_mask) {
+@@ -168,6 +171,7 @@ D3D12_DEPTH_STENCILOP_DESC1 native_stencil_face(
+           native_stencil(face.depth_pass), native_compare(face.function),
+           read_mask, write_mask};
+ }
++#endif
+ 
+ }  // namespace
+ 
+@@ -273,6 +277,7 @@ bool GraphicsPipeline::initialize(ID3D12Device* device,
+   desc.NumRenderTargets = static_cast<UINT>(color_formats.size());
+   desc.DSVFormat = depth_format;
+   desc.SampleDesc.Count = sample_count(samples);
++#if !defined(__MINGW32__)
+   Microsoft::WRL::ComPtr<ID3D12Device2> device2;
+   if (independent_stencil_masks_supported(device) &&
+       SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device2)))) {
+@@ -315,7 +320,9 @@ bool GraphicsPipeline::initialize(ID3D12Device* device,
+       error_ = failure_text("CreatePipelineState", result);
+       return false;
+     }
+-  } else if (depth_state && depth_state->stencil_enabled &&
++  } else
++#endif
++  if (depth_state && depth_state->stencil_enabled &&
+              depth_state->backface_stencil_enabled &&
+              (depth_state->stencil_read_mask !=
+                   depth_state->stencil_back_read_mask ||
+

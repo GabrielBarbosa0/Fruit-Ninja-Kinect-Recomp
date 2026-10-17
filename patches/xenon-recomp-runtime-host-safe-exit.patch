@@ -1,0 +1,21 @@
+diff --git a/runtime_host/src/main.cpp b/runtime_host/src/main.cpp
+index 394cbaf..9ccd443 100644
+--- a/runtime_host/src/main.cpp
++++ b/runtime_host/src/main.cpp
+@@ -391,5 +391,14 @@ int main(int argc, char** argv) {
+     std::scoped_lock console_log_lock(xenon::core::XenonSession::console_log_mutex());
+     std::cout << "[runtime_host] Session ended: " << session.last_error() << std::endl;
+   }
+-  return session.state() == xenon::core::SessionState::Failed ? 1 : 0;
++  const int exit_code =
++      session.state() == xenon::core::SessionState::Failed ? 1 : 0;
++  // A runtime host owns exactly one session. XenonSession::shutdown() still
++  // cannot interrupt guest worker threads parked in unbounded kernel waits;
++  // its known unload-before-thread-termination path can therefore execute
++  // guest code from an unloaded native extension during process teardown.
++  // Status and capability reports are durable above, so end this disposable
++  // process without running that unsafe destructor path.
++  std::fflush(stdout);
++  std::_Exit(exit_code);
+ }
+

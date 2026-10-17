@@ -77,7 +77,11 @@ $compatPatches = @(
     (Join-Path $repoRoot 'patches/xenon-recomp-legacy-hint-parser.patch'),
     (Join-Path $repoRoot 'patches/xenon-recomp-partial-codegen.patch'),
     (Join-Path $repoRoot 'patches/xenon-recomp-top-level-import-handoff.patch'),
-    (Join-Path $repoRoot 'patches/xenon-recomp-fruit-ninja-boot-exports.patch')
+    (Join-Path $repoRoot 'patches/xenon-recomp-fruit-ninja-boot-exports.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-d3d12-algorithm-include.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-d3d12-mingw-headers.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-no-dxc-coverage.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-runtime-host-safe-exit.patch')
 )
 Push-Location $XenonRoot
 try {

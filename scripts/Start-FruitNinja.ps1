@@ -6,6 +6,9 @@ param(
     [int]$ObserveSeconds = 15,
     [switch]$BuildHost,
     [switch]$KeepRunning,
+    [ValidateSet('D3D12', 'Automatic', 'None')]
+    [string]$Renderer = 'D3D12',
+    [switch]$Headless,
     [switch]$VerboseGuest
 )
 
@@ -34,6 +37,7 @@ New-Item -ItemType Directory -Force -Path $sessionDir | Out-Null
 $launchConfigPath = Join-Path $sessionDir 'launch-config.json'
 $savePath = Join-Path $sessionDir 'saves'
 $screenshotsPath = Join-Path $sessionDir 'screenshots'
+$hideWindow = [bool]$Headless -or $Renderer -eq 'None'
 
 $launchConfig = [ordered]@{
     configVersion = 1
@@ -55,7 +59,7 @@ $launchConfig = [ordered]@{
     profileName = 'Player One'
     region = 'Auto (Global)'
     profileXuid = '1'
-    renderer = 'None'
+    renderer = $Renderer
     shaderCache = $false
     shaderCacheMode = 'Disabled'
     inputBackend = 'None'
@@ -71,6 +75,9 @@ $launchConfig = [ordered]@{
     savePath = $savePath
     screenshotsPath = $screenshotsPath
     offline = $true
+    # This currently disables the unavailable LLVM-MinGW audio path and lets
+    # diagnostics continue if presentation fails. It does not prevent SDL2
+    # from creating a window when a real renderer is selected.
     headlessMode = $true
 }
 $launchConfig | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $launchConfigPath -Encoding UTF8
@@ -78,9 +85,16 @@ $launchConfig | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $launchConfig
 # libc++.dll and libunwind.dll are intentionally kept in the portable
 # toolchain. Add that directory for both the host executable and game DLL.
 $env:Path = "$toolchainBin;$env:Path"
-$process = Start-Process -FilePath $hostPath `
-    -ArgumentList @('--launch-config', $launchConfigPath) `
-    -WorkingDirectory $repoRoot -PassThru -WindowStyle Hidden
+$processArguments = @{
+    FilePath = $hostPath
+    ArgumentList = @('--launch-config', $launchConfigPath)
+    WorkingDirectory = $repoRoot
+    PassThru = $true
+}
+if ($hideWindow) {
+    $processArguments.WindowStyle = 'Hidden'
+}
+$process = Start-Process @processArguments
 
 $deadline = (Get-Date).AddSeconds($ObserveSeconds)
 $statusPath = Join-Path $sessionDir 'status.json'
@@ -114,4 +128,3 @@ if ($process.HasExited) {
     Write-Host 'Runtime remains active because -KeepRunning was specified.'
 }
 Write-Host "Log: $(Join-Path $sessionDir 'log.txt')"
-

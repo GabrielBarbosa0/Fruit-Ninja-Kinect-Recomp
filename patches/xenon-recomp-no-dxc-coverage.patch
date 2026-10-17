@@ -1,0 +1,23 @@
+diff --git a/src/graphics/common/backend_core_submission.hpp b/src/graphics/common/backend_core_submission.hpp
+index 612d6f5..69404d9 100644
+--- a/src/graphics/common/backend_core_submission.hpp
++++ b/src/graphics/common/backend_core_submission.hpp
+@@ -189,14 +189,18 @@ template <typename Derived, typename Api>
+ GpuShaderCoverage BackendCore<Derived, Api>::shader_coverage()
+     const noexcept {
+   GpuShaderCoverage coverage{};
++#ifdef XENON_HAS_DXC
+   coverage.shaders_discovered = decoded_shaders.size();
++#endif
+   coverage.translation_failures = shader_translation_failures;
+   coverage.shaders_translated =
+       coverage.shaders_discovered >= coverage.translation_failures
+           ? coverage.shaders_discovered - coverage.translation_failures
+           : 0u;
++#ifdef XENON_HAS_DXC
+   coverage.cache_hits = shader_cache.hits();
+   coverage.cache_misses = shader_cache.misses();
++#endif
+   return coverage;
+ }
+ 

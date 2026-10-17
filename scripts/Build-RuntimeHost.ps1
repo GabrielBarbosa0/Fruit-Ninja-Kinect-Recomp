@@ -27,9 +27,14 @@ if (-not (Test-Path -LiteralPath $xenonRoot)) {
 }
 
 # The runtime and generated module exchange C++ ExecutionContext objects, so
-# both must use the same LLVM/MinGW libc++ ABI. Graphics and XInput are built
-# because XenonSession currently has unconditional link references to their
-# frontends; a headless launch still selects Renderer=None/Input=None.
+# both must use the same LLVM/MinGW libc++ ABI. SDL2 supplies the native game
+# window and D3D12 presents Xenos output. Audio remains disabled because the
+# committed MSVC FFmpeg/XMA import libraries require OLDNAMES, which the
+# LLVM-MinGW ABI used by the generated module does not provide. DXC also
+# remains disabled with LLVM-MinGW
+# because Microsoft's current dxcapi headers emit unresolved __mingw_uuidof
+# symbols; enabling it is tracked separately from validating the swapchain.
+# AUTO dependency mode provisions Xenon's pinned SDL2 revision when absent.
 $env:Path = "$($compiler.Directory.FullName);$env:Path"
 & $cmake.FullName -S $xenonRoot -B $BuildDirectory -G Ninja `
     "-DCMAKE_MAKE_PROGRAM=$($ninja.FullName)" `
@@ -47,11 +52,11 @@ $env:Path = "$($compiler.Directory.FullName);$env:Path"
     -DXENON_INPUT_ENABLE_XINPUT=ON `
     -DXENON_ENABLE_NETWORK=OFF `
     -DXENON_ENABLE_VULKAN=OFF `
-    -DXENON_ENABLE_D3D12=OFF `
+    -DXENON_ENABLE_D3D12=ON `
     -DXENON_ENABLE_DXC=OFF `
-    -DXENON_DEPENDENCY_MODE=SYSTEM `
-    -DXENON_AUTO_BOOTSTRAP_DEPS=OFF `
-    -DXENON_FETCH_MISSING_DEPS=OFF
+    -DXENON_DEPENDENCY_MODE=AUTO `
+    -DXENON_AUTO_BOOTSTRAP_DEPS=ON `
+    -DXENON_FETCH_MISSING_DEPS=ON
 if ($LASTEXITCODE -ne 0) { throw 'Failed to configure xenon_runtime_host.' }
 
 & $cmake.FullName --build $BuildDirectory --target xenon_runtime_host -j $Jobs
@@ -62,4 +67,3 @@ if (-not (Test-Path -LiteralPath $hostPath)) {
     throw "xenon_runtime_host was not produced at $hostPath"
 }
 Write-Host "Runtime host: $hostPath"
-
