@@ -1,0 +1,39 @@
+diff --git a/src/core/session/threading/thread_execution.cpp b/src/core/session/threading/thread_execution.cpp
+index 722ef24..b26cc90 100644
+--- a/src/core/session/threading/thread_execution.cpp
++++ b/src/core/session/threading/thread_execution.cpp
+@@ -27,7 +27,8 @@ std::uint32_t XenonSession::run_execution() {
+ 
+   execution_active_.store(true);
+   const auto outcome =
+-      dispatch_guest_thread(*main_cpu_state_, loaded_xex_->image.entry_point, main_thread_);
++      dispatch_guest_thread(*main_cpu_state_, loaded_xex_->image.entry_point,
++                            main_thread_, config_.enable_export_diagnostics);
+   execution_active_.store(false);
+ 
+   // See run_created_guest_thread()'s matching cleanup: main_thread_ is
+@@ -117,7 +118,8 @@ std::uint32_t XenonSession::run_created_guest_thread(
+   state.gpr[3] = start_context;
+   state.gpr[13] = tls.kpcr_address;
+ 
+-  const auto outcome = dispatch_guest_thread(state, start_address, thread);
++  const auto outcome = dispatch_guest_thread(
++      state, start_address, thread, config_.enable_export_diagnostics);
+   {
+     logging::append_probe_log("dispatch_outcome_diag.log",
+                  "dispatch_guest_thread returned: thread_id=%u start_address=0x%08llX "
+diff --git a/runtime_host/src/host_setup.cpp b/runtime_host/src/host_setup.cpp
+index ae83ee9..02d0048 100644
+--- a/runtime_host/src/host_setup.cpp
++++ b/runtime_host/src/host_setup.cpp
+@@ -149,8 +149,8 @@ xenon::core::SessionConfig build_session_config(const LaunchConfig& launch) {
+   config.memory_watch_addresses = launch.memory_watch_addresses;
+   config.memory_watch_history = launch.memory_watch_history;
+   config.memory_watch_poll_ms = launch.memory_watch_poll_ms;
+-  config.enable_export_diagnostics = true;
+-  config.enable_export_trace = true;
++  config.enable_export_diagnostics = launch.log_verbose;
++  config.enable_export_trace = launch.log_verbose;
+ 
+   // "None" is the one explicit, deliberate way to ask for a graphics-less
+   // session (e.g. a dedicated/offscreen host); every other renderer string

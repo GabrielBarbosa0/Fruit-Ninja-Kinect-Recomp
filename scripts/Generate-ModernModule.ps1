@@ -123,7 +123,9 @@ $compatPatches = @(
     (Join-Path $repoRoot 'patches/xenon-recomp-runtime-host-safe-exit.patch'),
     (Join-Path $repoRoot 'patches/xenon-recomp-dxc-mingw-iids.patch'),
     (Join-Path $repoRoot 'patches/xenon-recomp-named-semaphore.patch'),
-    (Join-Path $repoRoot 'patches/xenon-recomp-vector-splat-word-width.patch')
+    (Join-Path $repoRoot 'patches/xenon-recomp-vector-splat-word-width.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-quiet-normal-dispatch.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-frontend-complete-gpu-ir.patch')
 )
 Push-Location $XenonRoot
 try {

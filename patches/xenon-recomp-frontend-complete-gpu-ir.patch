@@ -1,0 +1,42 @@
+diff --git a/src/graphics/common/backend_core_consume.hpp b/src/graphics/common/backend_core_consume.hpp
+index 9c22577..230748c 100644
+--- a/src/graphics/common/backend_core_consume.hpp
++++ b/src/graphics/common/backend_core_consume.hpp
+@@ -12,15 +12,30 @@ void BackendCore<Derived, Api>::consume(const ir::Command& command) {
+   collect_retired_resources();
+   ++command_count;
+   ++performance.commands;
++  // These commands are frontend-complete. The command processor has already
++  // performed their guest-memory, nested-buffer, synchronization, event or
++  // state effect before execute_ir() reaches the host renderer. They remain
++  // in IR for captures and diagnostics, so consume them explicitly instead
++  // of misreporting the preserved metadata as an unsupported backend op.
++  if (std::holds_alternative<ir::PhysicalMemoryWrite>(command) ||
++      std::holds_alternative<ir::IndirectBuffer>(command) ||
++      std::holds_alternative<ir::ShaderPacket>(command) ||
++      std::holds_alternative<ir::SynchronizationPacket>(command) ||
++      std::holds_alternative<ir::EventPacket>(command) ||
++      std::holds_alternative<ir::StatePacket>(command)) {
++    return;
++  }
++  // NOP payloads are retained losslessly because they may contain debug
++  // markers. They have no rendering semantics by definition.
++  if (const auto* packet = std::get_if<ir::Type3Packet>(&command);
++      packet && packet->opcode == Type3Opcode::Nop) {
++    return;
++  }
+   // Part 7 of the AC6 Runtime Readiness pass: RegisterWrite/DrawPacket/
+   // ShaderLoad are the only Command variants this backend actually consumes
+-  // below. PhysicalMemoryWrite/IndirectBuffer/ShaderPacket/
+-  // SynchronizationPacket/EventPacket/StatePacket/Type3Packet reaching here
+-  // have no handler at all - previously silently dropped. Type3Packet's own
+-  // doc comment (ir.hpp) is explicit that "packets are never silently
+-  // discarded merely because the host backend does not consume them yet";
+-  // this is the observability half of that promise; consuming them is
+-  // separate future work.
++  // below. Any other Type3Packet reaching here has no handler. Type3Packet's
++  // own doc comment (ir.hpp) is explicit that unknown packets are never
++  // silently discarded; this is the observability half of that promise.
+   if (!std::holds_alternative<ir::RegisterWrite>(command) &&
+       !std::holds_alternative<ir::DrawPacket>(command) &&
+       !std::holds_alternative<ir::ShaderLoad>(command)) {
