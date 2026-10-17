@@ -1,0 +1,28 @@
+diff --git a/src/core/session/execution/guest_dispatch.cpp b/src/core/session/execution/guest_dispatch.cpp
+index f611db0..00677f1 100644
+--- a/src/core/session/execution/guest_dispatch.cpp
++++ b/src/core/session/execution/guest_dispatch.cpp
+@@ -167,6 +167,23 @@ XenonSession::GuestDispatchOutcome XenonSession::dispatch_guest_thread(
+                            0xC000001Du);
+             break;
+           }
++          // A compiled one-instruction import veneer (`b import_thunk`) can
++          // escape to this outer loop. There is no compiled call site here
++          // to absorb RuntimeServices::call()'s Fallthrough convention, so
++          // treating the thunk like ordinary guest code repeatedly dispatches
++          // the veneer forever. At this boundary it is a tail call: run the
++          // export and return through the untouched LR, matching the dynamic
++          // fallback's execute_tail_branch() behavior.
++          if (is_recognized_import_thunk(result.next_address)) {
++            const auto import_target = result.next_address;
++            ++dispatch_count;
++            result = call(import_target, state, *memory_);
++            if (result.reason == cpu::FlowReason::Fallthrough) {
++              result = {cpu::FlowReason::Return,
++                        static_cast<cpu::GuestAddress>(state.lr & ~3ull), 0u};
++            }
++            continue;
++          }
+           auto* next_fn =
+               context.lookup_compiled(result.next_address,
+                                       cpu::CompiledLookupKind::Branch);

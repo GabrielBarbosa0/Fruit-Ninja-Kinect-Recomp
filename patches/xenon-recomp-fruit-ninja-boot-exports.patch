@@ -1,0 +1,314 @@
+diff --git a/include/xenon/xam/types.hpp b/include/xenon/xam/types.hpp
+index 1b774a1..9003393 100644
+--- a/include/xenon/xam/types.hpp
++++ b/include/xenon/xam/types.hpp
+@@ -12,6 +12,7 @@ using XResult = std::uint32_t;
+ 
+ namespace result {
+ constexpr XResult Success = 0x00000000u;
++constexpr XResult FileNotFound = 0x00000002u;
+ constexpr XResult Busy = 0x000000AAu;
+ constexpr XResult NoSuchUser = 0x00000002u;
+ constexpr XResult NotLoggedOn = 0x00000003u;
+diff --git a/include/xenon/xbox/xboxkrnl_ob_exports.hpp b/include/xenon/xbox/xboxkrnl_ob_exports.hpp
+index 0be0baf..a1e9f68 100644
+--- a/include/xenon/xbox/xboxkrnl_ob_exports.hpp
++++ b/include/xenon/xbox/xboxkrnl_ob_exports.hpp
+@@ -10,6 +10,12 @@ class KernelProcess;
+ 
+ namespace xenon::xbox {
+ 
++// ObOpenObjectByName (ordinal 0x10D / 269).
++// Xbox ABI: r3 = OBJECT_ATTRIBUTES* (RootDirectory/ObjectName/Attributes),
++// r4 = object type descriptor, r5 = access/parse context, r6 = HANDLE out.
++[[nodiscard]] bool ob_open_object_by_name_export(kernel::KernelProcess& process,
++                                                 core::ExportCallContext& context);
++
+ // ObReferenceObjectByHandle (ordinal 0x110 / 272).
+ // Guest ABI: r3 = handle, r4 = object type descriptor guest pointer (0 = no
+ // type check), r5 = guest pointer to receive the object's guest-visible
+diff --git a/include/xenon/xbox/xboxkrnl_xex_module_exports.hpp b/include/xenon/xbox/xboxkrnl_xex_module_exports.hpp
+index 62456b5..737df47 100644
+--- a/include/xenon/xbox/xboxkrnl_xex_module_exports.hpp
++++ b/include/xenon/xbox/xboxkrnl_xex_module_exports.hpp
+@@ -32,6 +32,9 @@ namespace xenon::xbox {
+ // owns the guest-visible module records and the dynamic export thunks.
+ [[nodiscard]] bool xex_get_module_handle_export(GuestModuleRegistry& registry,
+                                                 core::ExportCallContext& context);
++[[nodiscard]] bool xex_get_module_section_export(GuestModuleRegistry& registry,
++                                                 const XexImage& image,
++                                                 core::ExportCallContext& context);
+ [[nodiscard]] bool xex_get_procedure_address_export(GuestModuleRegistry& registry,
+                                                     core::ExportCallContext& context);
+ 
+diff --git a/src/core/session/exports/export_registration.cpp b/src/core/session/exports/export_registration.cpp
+index 03cad2f..cfd45ea 100644
+--- a/src/core/session/exports/export_registration.cpp
++++ b/src/core/session/exports/export_registration.cpp
+@@ -173,7 +173,8 @@ bool XenonSession::register_session_bound_kernel_exports() {
+     }
+   }
+ 
+-  // Register XexGetModuleHandle (0x195) / XexGetProcedureAddress (0x197). They
++  // Register XexGetModuleHandle (0x195), XexGetModuleSection (0x196) and
++  // XexGetProcedureAddress (0x197). They
+   // resolve through module_registry_, which is (re)created above with this
+   // registry, so a lookup only ever sees the exports registered here.
+   {
+@@ -190,6 +191,19 @@ bool XenonSession::register_session_bound_kernel_exports() {
+       set_error("Failed to register xboxkrnl XexGetModuleHandle export");
+       return false;
+     }
++    core::ExportDescriptor section_descriptor{};
++    section_descriptor.library = "xboxkrnl.exe";
++    section_descriptor.name = "XexGetModuleSection";
++    section_descriptor.ordinal = 0x196u;
++    section_descriptor.requirement = ExportRequirement::Required;
++    section_descriptor.handler = [this](ExportCallContext& ctx) -> bool {
++      if (!module_registry_ || !loaded_xex_) return false;
++      return xbox::xex_get_module_section_export(*module_registry_, loaded_xex_->image, ctx);
++    };
++    if (!export_registry_.register_export(std::move(section_descriptor))) {
++      set_error("Failed to register xboxkrnl XexGetModuleSection export");
++      return false;
++    }
+     core::ExportDescriptor proc_descriptor{};
+     proc_descriptor.library = "xboxkrnl.exe";
+     proc_descriptor.name = "XexGetProcedureAddress";
+diff --git a/src/core/session/exports/kernel_object_exports.cpp b/src/core/session/exports/kernel_object_exports.cpp
+index 9414559..22f1a71 100644
+--- a/src/core/session/exports/kernel_object_exports.cpp
++++ b/src/core/session/exports/kernel_object_exports.cpp
+@@ -109,6 +109,9 @@ bool XenonSession::register_kernel_object_exports() {
+          "pool/stack/heap/page-table/cache subdivisions zero because Memory V2 "
+          "does not attribute allocations to those hardware-specific buckets"},
+         {0x0C7u, "MmSetAddressProtect", &xbox::mm_set_address_protect_export},
++        {0x10Du, "ObOpenObjectByName", &xbox::ob_open_object_by_name_export, true,
++         "validates Xbox OBJECT_ATTRIBUTES/ANSI_STRING and returns the correct not-found status; "
++         "named kernel-object namespace lookup is not implemented yet"},
+         {0x110u, "ObReferenceObjectByHandle", &xbox::ob_reference_object_by_handle_export},
+         {0x105u, "ObDereferenceObject", &xbox::ob_dereference_object_export},
+         {0x0DAu, "NtDuplicateObject", &xbox::nt_duplicate_object_export},
+diff --git a/src/xam/xam_content_exports.cpp b/src/xam/xam_content_exports.cpp
+index febc24c..b879243 100644
+--- a/src/xam/xam_content_exports.cpp
++++ b/src/xam/xam_content_exports.cpp
+@@ -422,6 +422,32 @@ bool register_content_exports(core::ExportRegistry& registry, ContentManager& co
+     ok = registry.register_export(std::move(desc)) && ok;
+   }
+ 
++  // XamContentOpenFile (0x0269): user_index, root_name, path, flags,
++  // disposition_out, license_mask_out, overlapped. This API opens a packaged
++  // content file as a mounted root, a facility ContentManager does not yet
++  // model. Report the reference implementation's synchronous
++  // ERROR_FILE_NOT_FOUND result instead of trapping the title. The optional
++  // outputs are cleared so callers never observe stale stack data.
++  {
++    core::ExportDescriptor desc{};
++    desc.library = "xam";
++    desc.name = "XamContentOpenFile";
++    desc.ordinal = ordinal::XamContentOpenFile;
++    desc.requirement = core::ExportRequirement::Stubbed;
++    desc.partial = true;
++    desc.partial_note =
++        "packaged-content-file mounting is not modeled; returns ERROR_FILE_NOT_FOUND";
++    desc.handler = [](core::ExportCallContext& ctx) -> bool {
++      const auto disposition_ptr = static_cast<cpu::GuestAddress>(ctx.cpu.gpr[7]);
++      const auto license_mask_ptr = static_cast<cpu::GuestAddress>(ctx.cpu.gpr[8]);
++      if (disposition_ptr != 0u) write_u32_be(ctx.memory, disposition_ptr, 0u);
++      if (license_mask_ptr != 0u) write_u32_be(ctx.memory, license_mask_ptr, 0u);
++      ctx.cpu.gpr[3] = result::FileNotFound;
++      return true;
++    };
++    ok = registry.register_export(std::move(desc)) && ok;
++  }
++
+   return ok;
+ }
+ 
+diff --git a/src/xbox/exports/xboxkrnl_ob_exports.cpp b/src/xbox/exports/xboxkrnl_ob_exports.cpp
+index 1ab9a51..fb80ed0 100644
+--- a/src/xbox/exports/xboxkrnl_ob_exports.cpp
++++ b/src/xbox/exports/xboxkrnl_ob_exports.cpp
+@@ -29,6 +29,39 @@ constexpr Handle kCurrentThreadPseudoHandle = 0xFFFFFFFEu;
+ 
+ }  // namespace
+ 
++bool ob_open_object_by_name_export(kernel::KernelProcess&, ExportCallContext& context) {
++  const auto attributes_ptr = static_cast<cpu::GuestAddress>(context.cpu.gpr[3]);
++  const auto handle_out = static_cast<cpu::GuestAddress>(context.cpu.gpr[6]);
++  if (attributes_ptr == 0u || handle_out == 0u) {
++    context.cpu.gpr[3] = status::InvalidParameter;
++    return true;
++  }
++
++  // Xbox OBJECT_ATTRIBUTES is three BE32 fields. Validate the nested
++  // ANSI_STRING as well, even though the current KernelProcess does not yet
++  // expose a named-object directory to resolve it against.
++  const auto name_ptr = context.memory.read32_be(attributes_ptr + 4u);
++  if (name_ptr == 0u) {
++    context.cpu.gpr[3] = status::ObjectNameInvalid;
++    return true;
++  }
++  const auto name_length = context.memory.read16_be(name_ptr);
++  const auto name_buffer = context.memory.read32_be(name_ptr + 4u);
++  if (name_length == 0u || name_buffer == 0u) {
++    context.cpu.gpr[3] = status::ObjectNameInvalid;
++    return true;
++  }
++  // Touch the bounded name range so malformed guest pointers fail through
++  // the runtime's normal MemoryFault path instead of looking like a miss.
++  for (std::uint16_t i = 0u; i < name_length; ++i) {
++    static_cast<void>(context.memory.read8(name_buffer + i));
++  }
++
++  context.memory.write32_be(handle_out, 0u);
++  context.cpu.gpr[3] = status::ObjectNameNotFound;
++  return true;
++}
++
+ bool ob_reference_object_by_handle_export(kernel::KernelProcess& process,
+                                           ExportCallContext& context) {
+   const auto handle = static_cast<Handle>(context.cpu.gpr[3]);
+diff --git a/src/xbox/exports/xboxkrnl_threading_exports.cpp b/src/xbox/exports/xboxkrnl_threading_exports.cpp
+index 970debd..940b36b 100644
+--- a/src/xbox/exports/xboxkrnl_threading_exports.cpp
++++ b/src/xbox/exports/xboxkrnl_threading_exports.cpp
+@@ -394,6 +394,23 @@ bool kf_raise_irql(ExportCallContext& context) {
+ // masks the recompiled code was verified under, so no trap can be delivered.
+ bool ke_enable_fpu_exceptions(ExportCallContext&) { return true; }
+ 
++// KeInitializeDpc (0x6F): r3 = KDPC*, r4 = deferred routine,
++// r5 = deferred context. The Xbox KDPC is seven BE32 words: packed
++// type/importance/processor metadata, LIST_ENTRY, routine, context and two
++// system arguments. DpcObject is type 19.
++bool ke_initialize_dpc(ExportCallContext& context) {
++  const auto dpc = static_cast<cpu::GuestAddress>(context.cpu.gpr[3]);
++  if (dpc == 0u) return true;
++  context.memory.write32_be(dpc + 0x00u, 19u << 24u);
++  context.memory.write32_be(dpc + 0x04u, 0u);
++  context.memory.write32_be(dpc + 0x08u, 0u);
++  context.memory.write32_be(dpc + 0x0Cu, static_cast<std::uint32_t>(context.cpu.gpr[4]));
++  context.memory.write32_be(dpc + 0x10u, static_cast<std::uint32_t>(context.cpu.gpr[5]));
++  context.memory.write32_be(dpc + 0x14u, 0u);
++  context.memory.write32_be(dpc + 0x18u, 0u);
++  return true;
++}
++
+ }  // namespace
+ 
+ bool register_xboxkrnl_threading_exports(core::ExportRegistry& registry) {
+@@ -409,6 +426,7 @@ bool register_xboxkrnl_threading_exports(core::ExportRegistry& registry) {
+       {0x101u, "NtYieldExecution", &nt_yield_execution},
+       {0xB2u, "KfRaiseIrql", &kf_raise_irql},
+       {0x5Du, "KeEnableFpuExceptions", &ke_enable_fpu_exceptions},
++      {0x6Fu, "KeInitializeDpc", &ke_initialize_dpc},
+   };
+   for (const auto& spec : specs) {
+     core::ExportDescriptor descriptor{};
+diff --git a/src/xbox/exports/xboxkrnl_xex_module_exports.cpp b/src/xbox/exports/xboxkrnl_xex_module_exports.cpp
+index 16ee294..1252353 100644
+--- a/src/xbox/exports/xboxkrnl_xex_module_exports.cpp
++++ b/src/xbox/exports/xboxkrnl_xex_module_exports.cpp
+@@ -20,6 +20,7 @@ namespace {
+ constexpr std::size_t kOptionalHeaderTableOffset = 0x18u;
+ constexpr std::size_t kOptionalHeaderEntrySize = 8u;
+ constexpr std::uint32_t kXexHeaderSystemFlags = 0x00030000u;
++constexpr std::uint32_t kXexHeaderResourceInfo = 0x000002FFu;
+ 
+ std::uint32_t read_be32(const std::vector<std::byte>& bytes, std::size_t offset) {
+   std::uint32_t value = 0u;
+@@ -57,6 +58,26 @@ bool find_inline_optional_header(const std::vector<std::byte>& header_bytes, std
+   return false;
+ }
+ 
++bool find_offset_optional_header(const std::vector<std::byte>& header_bytes, std::uint32_t key,
++                                 std::size_t& out_offset) {
++  if (header_bytes.size() < kOptionalHeaderTableOffset) return false;
++  const auto header_size = read_be32(header_bytes, 0x08u);
++  const auto count = read_be32(header_bytes, 0x14u);
++  if (header_size > header_bytes.size()) return false;
++
++  for (std::uint32_t i = 0u; i < count; ++i) {
++    const auto entry_offset =
++        kOptionalHeaderTableOffset + static_cast<std::size_t>(i) * kOptionalHeaderEntrySize;
++    if (entry_offset + kOptionalHeaderEntrySize > header_size) return false;
++    if (read_be32(header_bytes, entry_offset) != key) continue;
++    const auto offset = static_cast<std::size_t>(read_be32(header_bytes, entry_offset + 4u));
++    if (offset >= header_size) return false;
++    out_offset = offset;
++    return true;
++  }
++  return false;
++}
++
+ }  // namespace
+ 
+ bool xex_check_executable_privilege_export(const XexImage& image,
+@@ -80,6 +101,7 @@ constexpr std::uint32_t kErrorInvalidParameter = 0x57u;
+ constexpr std::uint32_t kErrorNotFound = 0x490u;
+ constexpr std::uint32_t kStatusInvalidHandle = 0xC0000008u;
+ constexpr std::uint32_t kStatusInvalidParameter = 0xC000000Du;
++constexpr std::uint32_t kStatusNotFound = 0xC0000225u;
+ constexpr std::uint32_t kStatusDriverOrdinalNotFound = 0xC0000262u;
+ constexpr std::uint32_t kStatusDriverEntrypointNotFound = 0xC0000263u;
+ constexpr std::size_t kMaxModuleNameBytes = 260u;
+@@ -125,6 +147,58 @@ bool xex_get_module_handle_export(GuestModuleRegistry& registry, core::ExportCal
+   return true;
+ }
+ 
++// XexGetModuleSection (ordinal 0x196)
++// Guest ABI: r3 = module handle, r4 = ANSI resource name, r5 = address out,
++// r6 = size out -> r3 = NTSTATUS. XEX_HEADER_RESOURCE_INFO is an offset-backed
++// header whose first BE32 is its total size, followed by 16-byte records
++// (8-byte name, BE32 address, BE32 size).
++bool xex_get_module_section_export(GuestModuleRegistry& registry, const XexImage& image,
++                                   core::ExportCallContext& context) {
++  const auto handle = static_cast<cpu::GuestAddress>(context.cpu.gpr[3]);
++  const auto name_ptr = static_cast<cpu::GuestAddress>(context.cpu.gpr[4]);
++  const auto address_out = static_cast<cpu::GuestAddress>(context.cpu.gpr[5]);
++  const auto size_out = static_cast<cpu::GuestAddress>(context.cpu.gpr[6]);
++  if (name_ptr == 0u || address_out == 0u || size_out == 0u) {
++    context.cpu.gpr[3] = kStatusInvalidParameter;
++    return true;
++  }
++
++  const auto executable = registry.module_handle("");
++  if (!executable || (handle != 0u && handle != *executable)) {
++    context.cpu.gpr[3] = registry.is_module_handle(handle) ? kStatusNotFound : kStatusInvalidHandle;
++    return true;
++  }
++
++  context.memory.write32_be(address_out, 0u);
++  context.memory.write32_be(size_out, 0u);
++  const auto wanted = read_guest_cstring(context.memory, name_ptr, 9u);
++  std::size_t info_offset = 0u;
++  if (wanted.empty() ||
++      !find_offset_optional_header(image.header_bytes, kXexHeaderResourceInfo, info_offset) ||
++      info_offset + 4u > image.header_bytes.size()) {
++    context.cpu.gpr[3] = kStatusNotFound;
++    return true;
++  }
++
++  const auto info_size = static_cast<std::size_t>(read_be32(image.header_bytes, info_offset));
++  if (info_size < 4u || info_offset + info_size > image.header_bytes.size()) {
++    context.cpu.gpr[3] = kStatusNotFound;
++    return true;
++  }
++  for (std::size_t record = info_offset + 4u; record + 16u <= info_offset + info_size;
++       record += 16u) {
++    char resource_name[9]{};
++    std::memcpy(resource_name, image.header_bytes.data() + record, 8u);
++    if (std::strncmp(resource_name, wanted.c_str(), 8u) != 0) continue;
++    context.memory.write32_be(address_out, read_be32(image.header_bytes, record + 8u));
++    context.memory.write32_be(size_out, read_be32(image.header_bytes, record + 12u));
++    context.cpu.gpr[3] = 0u;
++    return true;
++  }
++  context.cpu.gpr[3] = kStatusNotFound;
++  return true;
++}
++
+ // XexGetProcedureAddress (ordinal 0x197)
+ // Guest ABI: r3 = module handle (0 = the executable), r4 = an ordinal (<= 0xFFFF)
+ // or a guest pointer to an ANSI export name (any value with the high 16 bits

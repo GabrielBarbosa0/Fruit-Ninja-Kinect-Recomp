@@ -102,6 +102,23 @@ and builds `artifacts/generated-modern/build/libxenon_game_module.dll`.
 Unresolved indirect sites remain available to Xenon's runtime fallback; the
 full host/VFS boot path is still the next integration milestone.
 
+### First runtime boot
+
+Build the ABI-compatible Xenon host and run a bounded headless boot probe:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Build-RuntimeHost.ps1 -Jobs 8
+powershell -ExecutionPolicy Bypass -File .\scripts\Start-FruitNinja.ps1 -ObserveSeconds 15
+```
+
+The launcher passes `default.uncompressed.xex` as a loose executable, mounts
+the surrounding extracted directory as `game:/`, binds
+`libxenon_game_module.dll`, and starts the recovered entry point. Each run
+writes inspectable `status.json`, `log.txt`, and diagnostic reports beneath
+`artifacts/runtime-sessions/`. Use `-KeepRunning` only after a boot survives
+the observation window; the default sends `stop.signal` so probes do not
+leave a background runtime behind.
+
 ## Test a real webcam
 
 The Windows build also produces `fnk_camera_test.exe`. Keep the portable

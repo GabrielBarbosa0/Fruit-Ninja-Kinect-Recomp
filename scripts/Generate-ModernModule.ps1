@@ -32,11 +32,39 @@ $ToolBuildDirectory = [IO.Path]::GetFullPath($ToolBuildDirectory)
 $hintsPath = Join-Path $repoRoot 'config/FNK.modern.hints'
 $materializedXex = Join-Path ([IO.Path]::GetDirectoryName($XexPath)) 'default.uncompressed.xex'
 $graphCache = Join-Path $OutputDirectory '.graph-windows-v2'
+$legacyXenonRoot = Join-Path $repoRoot 'tools/XenonRecomp'
 
 foreach ($required in @($XexPath, $XenonRoot, $hintsPath)) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "Required path does not exist: $required"
     }
+}
+
+$legacyImportPatch = Join-Path $repoRoot 'patches/xenonrecomp-preserve-import-thunks.patch'
+Push-Location $legacyXenonRoot
+try {
+    $savedErrorPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & git apply --check $legacyImportPatch 2>$null
+    $canApplyLegacyPatch = $LASTEXITCODE -eq 0
+    $ErrorActionPreference = $savedErrorPreference
+    if ($canApplyLegacyPatch) {
+        & git apply $legacyImportPatch
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to apply legacy XenonRecomp import patch: $legacyImportPatch"
+        }
+    } else {
+        $ErrorActionPreference = 'Continue'
+        & git apply --reverse --check $legacyImportPatch 2>$null
+        $legacyPatchAlreadyApplied = $LASTEXITCODE -eq 0
+        $ErrorActionPreference = $savedErrorPreference
+        if (-not $legacyPatchAlreadyApplied) {
+            throw "Legacy XenonRecomp import patch does not match this checkout: $legacyImportPatch"
+        }
+    }
+} finally {
+    $ErrorActionPreference = 'Stop'
+    Pop-Location
 }
 
 # libc++ on Windows may expose file_time_type::rep as a wider integral type,
@@ -47,7 +75,9 @@ $compatPatches = @(
     (Join-Path $repoRoot 'patches/xenon-recomp-llvm-mingw-dbghelp.patch'),
     (Join-Path $repoRoot 'patches/xenon-recomp-windows-graph-promotion.patch'),
     (Join-Path $repoRoot 'patches/xenon-recomp-legacy-hint-parser.patch'),
-    (Join-Path $repoRoot 'patches/xenon-recomp-partial-codegen.patch')
+    (Join-Path $repoRoot 'patches/xenon-recomp-partial-codegen.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-top-level-import-handoff.patch'),
+    (Join-Path $repoRoot 'patches/xenon-recomp-fruit-ninja-boot-exports.patch')
 )
 Push-Location $XenonRoot
 try {
@@ -88,6 +118,12 @@ if (-not $cmake -or -not $ninja -or -not $compiler) {
 }
 
 $env:Path = "$($compiler.Directory.FullName);$env:Path"
+
+$legacyBuild = Join-Path $repoRoot 'tools/XenonRecomp/build-fnk2'
+& $cmake.FullName --build $legacyBuild --target XenonUtils -j $Jobs
+if ($LASTEXITCODE -ne 0) {
+    throw 'Failed to rebuild legacy XenonUtils after applying the import-preservation patch.'
+}
 
 $materializerBuild = Join-Path $repoRoot 'build/native-materializer'
 & $cmake.FullName -S $repoRoot -B $materializerBuild -G Ninja `

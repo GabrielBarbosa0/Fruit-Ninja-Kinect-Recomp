@@ -37,7 +37,11 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  Image image = Xex2LoadImage(source.data(), source.size());
+  // The legacy analysis loader normally replaces every imported function
+  // thunk with NOP/NOP/NOP/blr. That is useful to its static analyzer, but a
+  // runtime XEX must retain the loader placeholders so the modern host can
+  // recover ordinals and bind imports before executing the entry point.
+  Image image = Xex2LoadImage(source.data(), source.size(), false);
   if (!image.data || image.size == 0) {
     std::cerr << "the legacy loader could not decrypt/decompress this XEX\n";
     return 1;
