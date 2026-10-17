@@ -7,6 +7,8 @@ option(FNK_BUILD_CAMERA "Build the Windows webcam capture backend" ON)
 option(FNK_BUILD_POSE "Build the ONNX MoveNet pose-estimation backend" ON)
 option(FNK_BUILD_REVERSE_TOOLS "Build local XEX reverse-engineering probes" OFF)
 option(FNK_BUILD_XENON_HOOKS "Build NUI overrides against generated XenonRecomp output" OFF)
+option(FNK_BUILD_XENON_RUNTIME_BRIDGE
+    "Build the NUI GuestMemory bridge for tools/Xenon-Recomp" OFF)
 
 add_library(fnk_nui STATIC
     src/nui/depth_synthesizer.cpp
@@ -136,6 +138,43 @@ if(FNK_BUILD_XENON_HOOKS)
         target_link_libraries(fnk_xenon_nui_hooks PUBLIC fnk_nui)
     else()
         message(FATAL_ERROR "Generate generated/ppc before enabling FNK_BUILD_XENON_HOOKS.")
+    endif()
+endif()
+
+if(FNK_BUILD_XENON_RUNTIME_BRIDGE)
+    # Only import the CPU and memory layers needed by AddressSpace. Importing
+    # the runtime's root project would also build its launcher, recompiler and
+    # preparation tools, none of which are dependencies of this bridge.
+    set(FNK_XENON_RUNTIME_ROOT "${CMAKE_SOURCE_DIR}/tools/Xenon-Recomp")
+    if(NOT TARGET Xenon::Memory)
+        set(XENON_SOURCE_DIR "${FNK_XENON_RUNTIME_ROOT}")
+        set(XENON_ENABLE_MEMORY ON)
+        set(XENON_MEMORY_DEFAULT_DIRECT_APERTURE OFF)
+        include("${FNK_XENON_RUNTIME_ROOT}/cmake/CompilerOptions.cmake")
+        include("${FNK_XENON_RUNTIME_ROOT}/cmake/Warnings.cmake")
+        add_subdirectory("${FNK_XENON_RUNTIME_ROOT}/src/cpu"
+                         "${CMAKE_BINARY_DIR}/xenon-runtime/cpu")
+        if(WIN32)
+            # Xenon's diagnostic paths use DbgHelp. MSVC obtains it from
+            # #pragma comment, while clang/MinGW needs an explicit link edge.
+            target_link_libraries(xenon_cpu PUBLIC dbghelp)
+        endif()
+        add_subdirectory("${FNK_XENON_RUNTIME_ROOT}/src/memory"
+                         "${CMAKE_BINARY_DIR}/xenon-runtime/memory")
+    endif()
+
+    add_library(fnk_nui_xenon_runtime STATIC
+        src/nui/xenon_address_space_memory.cpp
+        src/nui/xenon_registry_overlay.cpp)
+    target_include_directories(fnk_nui_xenon_runtime PUBLIC include)
+    target_compile_features(fnk_nui_xenon_runtime PUBLIC cxx_std_20)
+    target_link_libraries(fnk_nui_xenon_runtime PUBLIC fnk_nui Xenon::Memory)
+
+    add_executable(fnk_xenon_memory_probe apps/fnk_xenon_memory_probe.cpp)
+    target_compile_features(fnk_xenon_memory_probe PRIVATE cxx_std_20)
+    target_link_libraries(fnk_xenon_memory_probe PRIVATE fnk_nui_xenon_runtime)
+    if(FNK_BUILD_TESTS)
+        add_test(NAME fnk_xenon_memory_probe COMMAND fnk_xenon_memory_probe)
     endif()
 endif()
 

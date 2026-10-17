@@ -47,10 +47,28 @@ segmentation mask when available.
 
 ## Remaining integration boundaries
 
-1. Reserve and commit a scratch arena in the native runtime, then bind
-   `FlatGuestMemory`, `NuiDispatcher`, and the generated XenonRecomp hooks.
-2. Verify the Xbox linear X8R8G8B8 channel order and publish webcam color frames.
-3. The NUI identity and database containers must be mounted through the title
+The project now supports both local recompilation paths:
+
+- Old `tools/XenonRecomp`: `FlatGuestMemory` plus the generated-symbol hooks in
+  `xenon_hooks.cpp`.
+- Modern `tools/Xenon-Recomp`: `XenonAddressSpaceGuestMemory` plus
+  `XenonNuiRegistryOverlay`. Install the overlay immediately after the
+  generated module calls `bind_compiled_registry()`; it preserves the original
+  lookup callback for every unrelated address and for non-synthetic textures.
+
+The deterministic `fnk_xenon_memory_probe` exercises the modern path through a
+real compact `AddressSpace`, including CPU V2 lookup interception, skeleton
+marshalling, depth publication, texture locking, and big-endian readback.
+
+Remaining boundaries:
+
+1. Generate the modern game module and make its exported
+   `Xenon_BindCompiledRegistry` create a per-thread overlay after binding the
+   generated registry.
+2. Attach the live webcam/pose producer lifetime to `xenon_runtime_host` so it
+   continuously feeds the shared `NuiFrameStore` while guest code executes.
+3. Verify the Xbox linear X8R8G8B8 channel order and publish webcam color frames.
+4. The NUI identity and database containers must be mounted through the title
    VFS before NUI initialization.
-4. Multiple detected people need stable tracking IDs and Kinect player indices
+5. Multiple detected people need stable tracking IDs and Kinect player indices
    from 1 through 6; gameplay prioritizes the first two skeletons.

@@ -137,6 +137,13 @@ dispatcher. All other textures are forwarded to XenonRecomp's retained
 `__imp__sub_*` implementation, so ordinary game and renderer textures are not
 affected.
 
+For the modern CPU V2 runtime, `xenon_registry_overlay.cpp` wraps the generated
+`CompiledLookupCallback` after module binding. It substitutes native entries at
+the same eight recovered addresses and delegates all other lookups to the
+original registry. `LockRect` and `UnlockRect` also delegate at call time when
+the texture is not owned by `NuiDispatcher`, preserving the title's normal D3D
+texture behavior.
+
 Skeleton and depth/player streams are operational. Color stream lifecycle is
 recognized, but frame publication intentionally returns `E_NUI_FRAME_NO_DATA`
 until the Xbox linear X8R8G8B8 byte order is verified. This avoids silently

@@ -31,6 +31,10 @@ by Git.
   used by the title have been recovered and encoded as compile-time-checked types.
 - Native overrides now dispatch skeleton and depth/player frames through the
   recovered calls and synthetic `LockRect` textures into Xenon guest memory.
+- The modern `tools/Xenon-Recomp` path now has an `AddressSpace` adapter and a
+  CPU V2 compiled-registry overlay for all eight recovered NUI/texture entry
+  points. Unrelated compiled functions and real textures still fall through to
+  the generated game registry.
 - A Windows Media Foundation backend now enumerates real cameras and captures
   BGRA8 frames on a worker thread. It has been exercised with a physical USB
   webcam at 640x480.
@@ -39,8 +43,7 @@ by Git.
 - Automatic game-space calibration now derives the player center, metric body
   scale, reference depth, and floor line, with a torso-only fallback for
   cropped phone-camera framing.
-- Dispatch of the marshalled NUI frames into recompiled guest memory and the
-  complete native runtime are not yet implemented.
+- Loading and executing the complete recompiled title is not yet implemented.
 
 See [docs/NUI_ABI.md](docs/NUI_ABI.md) for the recovered guest ABI,
 [docs/ROADMAP.md](docs/ROADMAP.md) for the architecture and milestones,
@@ -68,6 +71,17 @@ With the portable toolchain described in `docs/TOOLING.md` present:
 
 This builds `fnk_nui` and runs the deterministic NUI tests. Use
 `-Configuration Release` for an optimized build.
+
+To validate the compatibility layer against the modern Xenon guest-memory and
+CPU V2 contracts, configure the optional bridge and run its probe:
+
+```powershell
+cmake -S . -B build/native-xenon -G Ninja `
+    -DFNK_BUILD_CAMERA=OFF -DFNK_BUILD_POSE=OFF `
+    -DFNK_BUILD_XENON_RUNTIME_BRIDGE=ON
+cmake --build build/native-xenon --target fnk_xenon_memory_probe
+.\build\native-xenon\fnk_xenon_memory_probe.exe
+```
 
 ## Test a real webcam
 
