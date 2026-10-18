@@ -25,9 +25,13 @@ Run:
 
 ```powershell
 .\build\native-release\fnk_calibration_test.exe --device 0 --samples 30 `
-    --confidence 0.30 --timeout 45 `
+    --confidence 0.30 --depth 1.0 --timeout 45 `
     --output .\artifacts\calibration\droidcam.toml
 ```
+
+Set `--depth` to the measured distance between the player and camera during
+calibration. A close, torso-only setup at roughly one metre should use
+`--depth 1.0`; the accepted range is 0.5–4.0 m.
 
 For best results:
 

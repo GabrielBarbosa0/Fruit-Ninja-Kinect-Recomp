@@ -509,6 +509,7 @@ void test_game_space_calibration() {
   GameSpaceCalibrationOptions torso_options;
   torso_options.required_samples = 3;
   torso_options.minimum_confidence = 0.35F;
+  torso_options.reference_depth_m = 1.0F;
   GameSpaceCalibrator fallback(torso_options);
   for (int sample = 0; sample < 3; ++sample) {
     fallback.add_sample(torso_only, 640, 480);
@@ -517,6 +518,12 @@ void test_game_space_calibration() {
          "cropped legs produce an explicitly marked torso-only profile");
   expect(fallback.profile().floor_y > 1.0F,
          "torso-only calibration can estimate a floor outside the image");
+
+  SkeletonMapper close_range_mapper;
+  close_range_mapper.set_game_space_profile(fallback.profile());
+  const auto close_range_skeleton = close_range_mapper.map(torso_only);
+  expect(near(close_range_skeleton.position_m.z, 1.0F, 2.0e-2F),
+         "measured close-range depth is preserved by torso-only calibration");
 }
 
 }  // namespace

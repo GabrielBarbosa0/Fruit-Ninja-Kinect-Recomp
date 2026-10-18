@@ -18,6 +18,7 @@ struct Arguments {
   std::uint32_t device{};
   std::size_t samples{30};
   float confidence{0.30F};
+  float reference_depth_m{2.0F};
   std::uint32_t timeout_seconds{45};
   std::filesystem::path model{"tools/pose/models/movenet-singlepose-lightning.onnx"};
   std::filesystem::path output{"artifacts/calibration/droidcam.toml"};
@@ -37,6 +38,8 @@ bool parse_arguments(int argc, char** argv, Arguments& arguments) {
         arguments.samples = static_cast<std::size_t>(std::stoull(value));
       } else if (option == "--confidence") {
         arguments.confidence = std::stof(value);
+      } else if (option == "--depth") {
+        arguments.reference_depth_m = std::stof(value);
       } else if (option == "--timeout") {
         arguments.timeout_seconds = static_cast<std::uint32_t>(std::stoul(value));
       } else if (option == "--model") {
@@ -51,7 +54,8 @@ bool parse_arguments(int argc, char** argv, Arguments& arguments) {
     }
   }
   return arguments.samples > 0 && arguments.timeout_seconds > 0 &&
-         arguments.confidence >= 0.0F && arguments.confidence <= 1.0F;
+         arguments.confidence >= 0.0F && arguments.confidence <= 1.0F &&
+         arguments.reference_depth_m >= 0.5F && arguments.reference_depth_m <= 4.0F;
 }
 
 const char* quality_name(fnk::nui::CalibrationQuality quality) {
@@ -64,7 +68,8 @@ int main(int argc, char** argv) {
   Arguments arguments;
   if (!parse_arguments(argc, argv, arguments)) {
     std::cerr << "Usage: fnk_calibration_test [--device N] [--samples N] "
-                 "[--confidence 0..1] [--timeout seconds] [--model file.onnx] "
+                 "[--confidence 0..1] [--depth metres] [--timeout seconds] "
+                 "[--model file.onnx] "
                  "[--output profile.toml]\n";
     return EXIT_FAILURE;
   }
@@ -84,6 +89,7 @@ int main(int argc, char** argv) {
   fnk::nui::GameSpaceCalibrationOptions calibration_options;
   calibration_options.required_samples = arguments.samples;
   calibration_options.minimum_confidence = arguments.confidence;
+  calibration_options.reference_depth_m = arguments.reference_depth_m;
   fnk::nui::GameSpaceCalibrator calibrator(calibration_options);
   fnk::camera::CameraFrame frame;
   fnk::nui::PoseFrame pose;
