@@ -2,19 +2,29 @@
 
 #include "generated/default.uncompressed/fruit_ninja_kinect_recomp_init.h"
 
+#include "fnk/camera/media_foundation_camera.hpp"
 #include "fnk/nui/depth_synthesizer.hpp"
 #include "fnk/nui/dispatcher.hpp"
 #include "fnk/nui/frame_store.hpp"
+#include "fnk/nui/game_space_calibration.hpp"
 #include "fnk/nui/guest_memory.hpp"
+#include "fnk/nui/skeleton_mapper.hpp"
+#include "fnk/pose/movenet_onnx.hpp"
 
+#include <rex/logging/macros.h>
 #include <rex/system/xmemory.h>
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -54,7 +64,7 @@ std::mutex g_mutex;
 std::unique_ptr<RexGuestMemory> g_memory;
 std::unique_ptr<fnk::nui::NuiFrameStore> g_frames;
 std::unique_ptr<fnk::nui::NuiDispatcher> g_dispatcher;
-std::jthread g_placeholder_publisher;
+std::jthread g_frame_publisher;
 
 fnk::nui::NuiDispatcher* dispatcher() noexcept {
   std::lock_guard lock(g_mutex);
@@ -97,6 +107,14 @@ fnk::nui::SkeletonFrame make_placeholder_skeleton(std::uint64_t timestamp_us) {
   return frame;
 }
 
+void publish(const fnk::nui::SkeletonFrame& skeleton,
+             const fnk::nui::DepthPlayerFrame& depth) {
+  std::lock_guard lock(g_mutex);
+  if (g_frames) {
+    g_frames->publish(skeleton, depth);
+  }
+}
+
 void publish_placeholder_frames(std::stop_token stop_token) {
   const auto started = std::chrono::steady_clock::now();
   while (!stop_token.stop_requested()) {
@@ -111,13 +129,137 @@ void publish_placeholder_frames(std::stop_token stop_token) {
     depth.packed_depth.assign(depth.width * depth.height,
                               fnk::nui::pack_depth_player(2200, 1));
 
-    {
-      std::lock_guard lock(g_mutex);
-      if (g_frames) {
-        g_frames->publish(skeleton, depth);
-      }
-    }
+    publish(skeleton, depth);
     std::this_thread::sleep_for(std::chrono::milliseconds(33));
+  }
+}
+
+std::optional<std::uint32_t> environment_u32(const char* name) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || *value == '\0') {
+    return std::nullopt;
+  }
+  try {
+    const unsigned long parsed = std::stoul(value);
+    if (parsed <= UINT32_MAX) {
+      return static_cast<std::uint32_t>(parsed);
+    }
+  } catch (...) {
+  }
+  REXLOG_WARN("FNK NUI: ignoring invalid {}={}", name, value);
+  return std::nullopt;
+}
+
+std::filesystem::path environment_path(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr ? std::filesystem::path(value) : std::filesystem::path{};
+}
+
+std::filesystem::path find_pose_model() {
+  if (auto configured = environment_path("FNK_POSE_MODEL"); !configured.empty()) {
+    return configured;
+  }
+  constexpr std::string_view filename = "movenet-singlepose-lightning.onnx";
+  const std::filesystem::path local(filename);
+  if (std::filesystem::exists(local)) {
+    return local;
+  }
+  return std::filesystem::path("tools/pose/models") / filename;
+}
+
+std::filesystem::path find_calibration_profile() {
+  if (auto configured = environment_path("FNK_CALIBRATION_PROFILE");
+      !configured.empty()) {
+    return configured;
+  }
+  for (const auto& candidate : {
+           std::filesystem::path("droidcam.toml"),
+           std::filesystem::path("artifacts/calibration/droidcam.toml"),
+           std::filesystem::path("../../artifacts/calibration/droidcam.toml"),
+       }) {
+    if (std::filesystem::exists(candidate)) {
+      return candidate;
+    }
+  }
+  return {};
+}
+
+void publish_live_frames(std::stop_token stop_token) {
+  const auto model_path = find_pose_model();
+  fnk::pose::MoveNetOnnx estimator(model_path);
+  if (!estimator.ready()) {
+    REXLOG_ERROR("FNK NUI: pose model unavailable at '{}': {}. Using synthetic input.",
+                 model_path.string(), estimator.last_error());
+    publish_placeholder_frames(stop_token);
+    return;
+  }
+
+  fnk::camera::CameraOptions camera_options;
+  camera_options.device_index = environment_u32("FNK_CAMERA_DEVICE").value_or(0);
+  camera_options.requested_width = environment_u32("FNK_CAMERA_WIDTH").value_or(640);
+  camera_options.requested_height = environment_u32("FNK_CAMERA_HEIGHT").value_or(480);
+  camera_options.requested_fps = environment_u32("FNK_CAMERA_FPS").value_or(30);
+
+  fnk::camera::MediaFoundationCamera camera;
+  if (!camera.start(camera_options)) {
+    REXLOG_ERROR("FNK NUI: camera {} failed: {}. Using synthetic input.",
+                 camera_options.device_index, camera.last_error());
+    publish_placeholder_frames(stop_token);
+    return;
+  }
+
+  fnk::nui::SkeletonMapper mapper;
+  const auto profile_path = find_calibration_profile();
+  if (!profile_path.empty()) {
+    fnk::nui::GameSpaceProfile profile;
+    std::string error;
+    if (fnk::nui::load_game_space_profile(profile_path, profile, &error)) {
+      mapper.set_game_space_profile(profile);
+      REXLOG_INFO("FNK NUI: loaded calibration profile '{}'.", profile_path.string());
+    } else {
+      REXLOG_WARN("FNK NUI: could not load calibration profile '{}': {}",
+                  profile_path.string(), error);
+    }
+  }
+
+  fnk::nui::DepthSynthesizer depth_synthesizer;
+  fnk::camera::CameraFrame camera_frame;
+  fnk::nui::PoseFrame pose;
+  std::uint64_t previous_sequence = 0;
+  bool tracking_announced = false;
+  REXLOG_INFO("FNK NUI: live camera {} started (requested {}x{} at {} FPS).",
+              camera_options.device_index, camera_options.requested_width,
+              camera_options.requested_height, camera_options.requested_fps);
+
+  while (!stop_token.stop_requested() && camera.running()) {
+    if (!camera.latest_frame(camera_frame) || camera_frame.sequence == previous_sequence) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      continue;
+    }
+    previous_sequence = camera_frame.sequence;
+    if (!estimator.infer(camera_frame, pose)) {
+      REXLOG_WARN("FNK NUI: pose inference failed: {}", estimator.last_error());
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      continue;
+    }
+    auto skeleton = mapper.map(pose);
+    if (!tracking_announced &&
+        skeleton.state != fnk::nui::SkeletonTrackingState::NotTracked) {
+      tracking_announced = true;
+      const auto stats = estimator.stats();
+      REXLOG_INFO("FNK NUI: first live skeleton published after {} pose frames "
+                  "(inference {:.2f} ms).",
+                  stats.frames_processed, stats.last_inference_ms);
+    }
+    auto depth = depth_synthesizer.synthesize(pose, skeleton);
+    publish(skeleton, depth);
+  }
+
+  camera.stop();
+  if (!stop_token.stop_requested()) {
+    REXLOG_ERROR("FNK NUI: camera stream ended: {}. Switching to synthetic input.",
+                 camera.last_error());
+    publish_placeholder_frames(stop_token);
   }
 }
 
@@ -138,11 +280,11 @@ void initialize(rex::memory::Memory* memory) {
   g_memory = std::make_unique<RexGuestMemory>(*memory);
   g_frames = std::make_unique<fnk::nui::NuiFrameStore>();
   g_dispatcher = std::make_unique<fnk::nui::NuiDispatcher>(*g_memory, *g_frames);
-  g_placeholder_publisher = std::jthread(publish_placeholder_frames);
+  g_frame_publisher = std::jthread(publish_live_frames);
 }
 
 void shutdown() {
-  g_placeholder_publisher = {};
+  g_frame_publisher = {};
   std::lock_guard lock(g_mutex);
   g_dispatcher.reset();
   g_frames.reset();
