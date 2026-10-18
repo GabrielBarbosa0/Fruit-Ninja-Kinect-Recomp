@@ -9,16 +9,21 @@ executable backed by the ReXGlue runtime and its Xenos/Vulkan GPU plugin.
 - The title XEX and 21,000+ recompiled PowerPC functions are registered.
 - Relative title paths are rooted at `game:\`, allowing the original assets to
   load from `artifacts/extracted/fruit-ninja-kinect`.
-- The latest controlled run presented 422 frames and stayed alive for the full
-  20-second probe. A game thread then reported the next undiscovered function,
-  `0x8240A700`, which is already recorded in the config for the next codegen.
+- The runtime-discovered entry points through `0x8240A6E0` are included; the
+  latest 30-second probes present roughly 970 frames without a fatal error.
+- A native ReXGlue NUI bridge overrides the six statically linked Kinect entry
+  points and the two synthetic depth-texture methods used by this title.
+- A temporary tracked skeleton is published at 30 Hz until the DroidCam pose
+  provider is connected to the same frame store.
+- The complete initial menu has been visually verified: Fruit Ninja Kinect
+  logo, Sensei, `SLICE FRUIT TO BEGIN`, the `BEGIN` watermelon, and Kinect
+  Tuner are rendered correctly.
 - ReXGlue's generated translation units use stable guest-address buckets so a
   newly discovered function does not renumber every generated source file.
 
-The initial menu is not considered reached until it is visually verified. The
-current milestone proves that the native title is executing its render loop and
-loading real game assets, but more missed function entry points may still need
-to be declared.
+The initial-menu milestone is complete. The next milestone is interactive menu
+control using the existing webcam/DroidCam capture, pose inference and game-space
+calibration pipeline instead of the temporary skeleton publisher.
 
 ## Build and probe
 
@@ -32,6 +37,14 @@ The script regenerates code, builds the native executable, runs it in a hidden
 window for 20 seconds, stops only that process if it is still alive, and reports
 the newest fatal guest address and log path. Use `-ProbeSeconds` to change the
 bounded run duration.
+
+When the only config change is a runtime-discovered indirect function hint, use
+`-IncrementalRuntimeHint`. This preserves the shared declaration header's
+timestamp and rebuilds only the affected address bucket and registration data:
+
+```powershell
+& .\experiments\rexglue\scripts\build-and-probe.ps1 -IncrementalRuntimeHint -ProbeSeconds 30
+```
 
 ## Local SDK changes
 

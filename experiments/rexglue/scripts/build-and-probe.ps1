@@ -1,6 +1,8 @@
 param(
     [ValidateRange(1, 120)]
-    [int]$ProbeSeconds = 20
+    [int]$ProbeSeconds = 20,
+
+    [switch]$IncrementalRuntimeHint
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,6 +16,12 @@ $cmake = (Resolve-Path (Join-Path $toolchainRoot 'cmake\cmake-4.4.4-windows-x86_
 $rexglue = (Resolve-Path (Join-Path $repositoryRoot 'tools\rexglue-sdk\out\win-amd64\rexglue.exe')).Path
 $buildRoot = Join-Path $repositoryRoot 'build\rexglue-game'
 $gameRoot = (Resolve-Path (Join-Path $repositoryRoot 'artifacts\extracted\fruit-ninja-kinect')).Path
+$generatedHeader = Join-Path $experimentRoot 'generated\default.uncompressed\fruit_ninja_kinect_recomp_init.h'
+$generatedHeaderTime = if ($IncrementalRuntimeHint -and (Test-Path $generatedHeader)) {
+    (Get-Item $generatedHeader).LastWriteTimeUtc
+} else {
+    $null
+}
 
 $env:PATH = "$compilerBin;$ninjaBin;$env:PATH"
 
@@ -23,6 +31,13 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "ReXGlue codegen failed with exit code $LASTEXITCODE" }
 } finally {
     Pop-Location
+}
+
+# Runtime-only hints add a declaration used by the changed address bucket and
+# registration tables, but do not alter already compiled function bodies. Keep
+# the shared header timestamp stable so Ninja rebuilds only those changed units.
+if ($null -ne $generatedHeaderTime) {
+    (Get-Item $generatedHeader).LastWriteTimeUtc = $generatedHeaderTime
 }
 
 & $cmake --build $buildRoot --target fruit_ninja_kinect_recomp -j 8

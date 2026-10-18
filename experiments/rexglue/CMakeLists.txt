@@ -13,7 +13,17 @@ include(generated/rexglue.cmake)
 # Sources
 set(FRUITNINJAKINECTRECOMP_SOURCES
     src/main.cpp
+    src/rex_nui_bridge.cpp
 )
+
+set(FNK_REPOSITORY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+add_library(fnk_rex_nui STATIC
+    "${FNK_REPOSITORY_ROOT}/src/nui/dispatcher.cpp"
+    "${FNK_REPOSITORY_ROOT}/src/nui/frame_store.cpp"
+    "${FNK_REPOSITORY_ROOT}/src/nui/guest_marshaller.cpp"
+)
+target_include_directories(fnk_rex_nui PUBLIC "${FNK_REPOSITORY_ROOT}/include")
+target_compile_features(fnk_rex_nui PUBLIC cxx_std_20)
 
 if(WIN32)
     add_executable(fruit_ninja_kinect_recomp WIN32 ${FRUITNINJAKINECTRECOMP_SOURCES})
@@ -28,6 +38,7 @@ if(MINGW AND TARGET rexgpu-xenos)
 endif()
 
 rexglue_setup_target(fruit_ninja_kinect_recomp GPU_PLUGINS xenos)
+target_link_libraries(fruit_ninja_kinect_recomp PRIVATE fnk_rex_nui)
 
 # ReXGlue's SDL host uses wWinMain on Windows. LLVM-MinGW otherwise links the
 # ANSI WinMain startup object for WIN32 executables.

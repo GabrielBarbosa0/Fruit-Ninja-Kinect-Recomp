@@ -52,3 +52,12 @@ name = "sub_82169950"
 
 [functions."0x8240A700"]
 name = "sub_8240A700"
+
+[functions."0x823EAEF8"]
+name = "sub_823EAEF8"
+
+[functions."0x82415D28"]
+name = "sub_82415D28"
+
+[functions."0x8240A6E0"]
+name = "sub_8240A6E0"

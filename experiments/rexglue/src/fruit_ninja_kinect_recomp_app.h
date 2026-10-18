@@ -6,6 +6,8 @@
 
 #include <rex/rex_app.h>
 
+#include "rex_nui_bridge.h"
+
 class FruitNinjaKinectRecompApp : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
@@ -21,6 +23,12 @@ class FruitNinjaKinectRecompApp : public rex::ReXApp {
   // void OnPreSetup(rex::RuntimeConfig& config) override {}
   void OnLoadXexImage(std::string& xex_image) override {
     xex_image = "game:\\default.uncompressed.xex";
+  }
+  void OnPostSetup() override {
+    fnk::rexbridge::initialize(runtime()->memory());
+  }
+  void OnShutdown() override {
+    fnk::rexbridge::shutdown();
   }
   // void OnPostLoadXexImage() override {}
   // void OnPostSetup() override {}
