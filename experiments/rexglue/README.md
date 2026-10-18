@@ -17,6 +17,9 @@ executable backed by the ReXGlue runtime and its Xenos/Vulkan GPU plugin.
   game-space mapping and synthetic Kinect depth into the same NUI frame store.
   If the model or camera cannot start, the bridge falls back to its synthetic
   tracked skeleton instead of preventing the game from booting.
+- Each published frame signals the title-created skeleton and depth events
+  through ReXGlue's kernel object table. The consumer resets those events when
+  it retrieves a frame, matching the original NUI producer/consumer cadence.
 - The complete initial menu has been visually verified: Fruit Ninja Kinect
   logo, Sensei, `SLICE FRUIT TO BEGIN`, the `BEGIN` watermelon, and Kinect
   Tuner are rendered correctly.

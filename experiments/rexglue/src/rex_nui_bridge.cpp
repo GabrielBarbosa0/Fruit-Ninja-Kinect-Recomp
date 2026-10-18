@@ -12,6 +12,8 @@
 #include "fnk/pose/movenet_onnx.hpp"
 
 #include <rex/logging/macros.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/xevent.h>
 #include <rex/system/xmemory.h>
 
 #include <atomic>
@@ -61,14 +63,56 @@ class RexGuestMemory final : public fnk::nui::GuestMemory {
 };
 
 std::mutex g_mutex;
+rex::system::KernelState* g_kernel_state{};
 std::unique_ptr<RexGuestMemory> g_memory;
 std::unique_ptr<fnk::nui::NuiFrameStore> g_frames;
 std::unique_ptr<fnk::nui::NuiDispatcher> g_dispatcher;
 std::jthread g_frame_publisher;
 
+struct NuiDiagnostics {
+  std::atomic_uint64_t skeleton_requests{};
+  std::atomic_uint64_t depth_requests{};
+  std::atomic_uint64_t texture_locks{};
+  std::atomic_bool skeleton_success_logged{};
+  std::atomic_bool depth_success_logged{};
+  std::atomic_bool texture_lock_logged{};
+};
+
+NuiDiagnostics g_diagnostics;
+std::atomic_uint32_t g_skeleton_event{};
+std::atomic_uint32_t g_depth_event{};
+
 fnk::nui::NuiDispatcher* dispatcher() noexcept {
   std::lock_guard lock(g_mutex);
   return g_dispatcher.get();
+}
+
+void signal_event(std::uint32_t handle) {
+  rex::system::KernelState* kernel_state = nullptr;
+  {
+    std::lock_guard lock(g_mutex);
+    kernel_state = g_kernel_state;
+  }
+  if (kernel_state == nullptr || handle == 0) {
+    return;
+  }
+  if (auto event = kernel_state->object_table()->LookupObject<rex::system::XEvent>(handle)) {
+    event->Set(0, false);
+  }
+}
+
+void reset_event(std::uint32_t handle) {
+  rex::system::KernelState* kernel_state = nullptr;
+  {
+    std::lock_guard lock(g_mutex);
+    kernel_state = g_kernel_state;
+  }
+  if (kernel_state == nullptr || handle == 0) {
+    return;
+  }
+  if (auto event = kernel_state->object_table()->LookupObject<rex::system::XEvent>(handle)) {
+    event->Reset();
+  }
 }
 
 fnk::nui::SkeletonFrame make_placeholder_skeleton(std::uint64_t timestamp_us) {
@@ -109,10 +153,14 @@ fnk::nui::SkeletonFrame make_placeholder_skeleton(std::uint64_t timestamp_us) {
 
 void publish(const fnk::nui::SkeletonFrame& skeleton,
              const fnk::nui::DepthPlayerFrame& depth) {
-  std::lock_guard lock(g_mutex);
-  if (g_frames) {
-    g_frames->publish(skeleton, depth);
+  {
+    std::lock_guard lock(g_mutex);
+    if (g_frames) {
+      g_frames->publish(skeleton, depth);
+    }
   }
+  signal_event(g_skeleton_event.load(std::memory_order_acquire));
+  signal_event(g_depth_event.load(std::memory_order_acquire));
 }
 
 void publish_placeholder_frames(std::stop_token stop_token) {
@@ -247,9 +295,24 @@ void publish_live_frames(std::stop_token stop_token) {
         skeleton.state != fnk::nui::SkeletonTrackingState::NotTracked) {
       tracking_announced = true;
       const auto stats = estimator.stats();
-      REXLOG_INFO("FNK NUI: first live skeleton published after {} pose frames "
-                  "(inference {:.2f} ms).",
-                  stats.frames_processed, stats.last_inference_ms);
+      const auto& left = skeleton.joints[fnk::nui::joint_index(fnk::nui::Joint::HandLeft)];
+      const auto& right = skeleton.joints[fnk::nui::joint_index(fnk::nui::Joint::HandRight)];
+      REXLOG_INFO(
+          "FNK NUI: first live skeleton published after {} pose frames "
+          "(body state {}, inference {:.2f} ms, left hand state {} at "
+          "[{:.2f},{:.2f},{:.2f}], right hand state {} at [{:.2f},{:.2f},{:.2f}]).",
+          stats.frames_processed, static_cast<std::uint32_t>(skeleton.state),
+          stats.last_inference_ms, static_cast<std::uint32_t>(left.state),
+          left.position_m.x, left.position_m.y, left.position_m.z,
+          static_cast<std::uint32_t>(right.state), right.position_m.x,
+          right.position_m.y, right.position_m.z);
+    }
+    const auto stats = estimator.stats();
+    if (stats.frames_processed % 120U == 0U) {
+      REXLOG_DEBUG("FNK NUI: live pose heartbeat: {} frames, body state {}, "
+                   "inference {:.2f} ms.",
+                   stats.frames_processed, static_cast<std::uint32_t>(skeleton.state),
+                   stats.last_inference_ms);
     }
     auto depth = depth_synthesizer.synthesize(pose, skeleton);
     publish(skeleton, depth);
@@ -271,15 +334,24 @@ void return_hresult(PPCContext& ctx, fnk::nui::guest::HResult result) noexcept {
 
 namespace fnk::rexbridge {
 
-void initialize(rex::memory::Memory* memory) {
+void initialize(rex::memory::Memory* memory, rex::system::KernelState* kernel_state) {
   shutdown();
-  if (memory == nullptr) {
+  if (memory == nullptr || kernel_state == nullptr) {
     return;
   }
   std::lock_guard lock(g_mutex);
+  g_kernel_state = kernel_state;
   g_memory = std::make_unique<RexGuestMemory>(*memory);
   g_frames = std::make_unique<fnk::nui::NuiFrameStore>();
   g_dispatcher = std::make_unique<fnk::nui::NuiDispatcher>(*g_memory, *g_frames);
+  g_diagnostics.skeleton_requests = 0;
+  g_diagnostics.depth_requests = 0;
+  g_diagnostics.texture_locks = 0;
+  g_diagnostics.skeleton_success_logged = false;
+  g_diagnostics.depth_success_logged = false;
+  g_diagnostics.texture_lock_logged = false;
+  g_skeleton_event = 0;
+  g_depth_event = 0;
   g_frame_publisher = std::jthread(publish_live_frames);
 }
 
@@ -289,13 +361,20 @@ void shutdown() {
   g_dispatcher.reset();
   g_frames.reset();
   g_memory.reset();
+  g_kernel_state = nullptr;
+  g_skeleton_event = 0;
+  g_depth_event = 0;
 }
 
 }  // namespace fnk::rexbridge
 
 extern "C" REX_FUNC(sub_821C2918) {
   if (auto* nui = dispatcher()) {
-    return_hresult(ctx, nui->initialize(ctx.r3.u32, ctx.r4.u32));
+    const auto result = nui->initialize(ctx.r3.u32, ctx.r4.u32);
+    REXLOG_INFO("FNK NUI ABI: NuiInitialize(flags=0x{:08X}, thread=0x{:08X}) -> "
+                "0x{:08X}",
+                ctx.r3.u32, ctx.r4.u32, static_cast<std::uint32_t>(result));
+    return_hresult(ctx, result);
   } else {
     return_hresult(ctx, fnk::nui::guest::kENuiFeatureNotInitialized);
   }
@@ -303,7 +382,14 @@ extern "C" REX_FUNC(sub_821C2918) {
 
 extern "C" REX_FUNC(sub_821B3720) {
   if (auto* nui = dispatcher()) {
-    return_hresult(ctx, nui->skeleton_tracking_enable(ctx.r3.u32, ctx.r4.u32));
+    const auto result = nui->skeleton_tracking_enable(ctx.r3.u32, ctx.r4.u32);
+    if (result == fnk::nui::guest::kSOk) {
+      g_skeleton_event.store(ctx.r3.u32, std::memory_order_release);
+    }
+    REXLOG_INFO("FNK NUI ABI: NuiSkeletonTrackingEnable(event=0x{:08X}, "
+                "flags=0x{:08X}) -> 0x{:08X}",
+                ctx.r3.u32, ctx.r4.u32, static_cast<std::uint32_t>(result));
+    return_hresult(ctx, result);
   } else {
     return_hresult(ctx, fnk::nui::guest::kENuiFeatureNotInitialized);
   }
@@ -311,7 +397,16 @@ extern "C" REX_FUNC(sub_821B3720) {
 
 extern "C" REX_FUNC(sub_821B3870) {
   if (auto* nui = dispatcher()) {
-    return_hresult(ctx, nui->skeleton_get_next_frame(ctx.r3.u32, ctx.r4.u32));
+    reset_event(g_skeleton_event.load(std::memory_order_acquire));
+    const auto result = nui->skeleton_get_next_frame(ctx.r3.u32, ctx.r4.u32);
+    const auto count = ++g_diagnostics.skeleton_requests;
+    if (count == 1 || count % 300U == 0U ||
+        (result == fnk::nui::guest::kSOk &&
+         !g_diagnostics.skeleton_success_logged.exchange(true))) {
+      REXLOG_INFO("FNK NUI ABI: skeleton request {} -> 0x{:08X}", count,
+                  static_cast<std::uint32_t>(result));
+    }
+    return_hresult(ctx, result);
   } else {
     return_hresult(ctx, fnk::nui::guest::kENuiStreamNotEnabled);
   }
@@ -319,10 +414,20 @@ extern "C" REX_FUNC(sub_821B3870) {
 
 extern "C" REX_FUNC(sub_821C3CC0) {
   if (auto* nui = dispatcher()) {
-    return_hresult(ctx, nui->image_stream_open(
-                            static_cast<fnk::nui::guest::ImageType>(ctx.r3.u32),
-                            static_cast<fnk::nui::guest::ImageResolution>(ctx.r4.u32),
-                            ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32));
+    const auto result = nui->image_stream_open(
+        static_cast<fnk::nui::guest::ImageType>(ctx.r3.u32),
+        static_cast<fnk::nui::guest::ImageResolution>(ctx.r4.u32), ctx.r5.u32,
+        ctx.r6.u32, ctx.r7.u32, ctx.r8.u32);
+    if (result == fnk::nui::guest::kSOk &&
+        ctx.r3.u32 ==
+            static_cast<std::uint32_t>(fnk::nui::guest::ImageType::DepthAndPlayerIndex)) {
+      g_depth_event.store(ctx.r7.u32, std::memory_order_release);
+    }
+    REXLOG_INFO("FNK NUI ABI: NuiImageStreamOpen(type={}, resolution={}, limit={}) "
+                "-> 0x{:08X}",
+                ctx.r3.u32, ctx.r4.u32, ctx.r6.u32,
+                static_cast<std::uint32_t>(result));
+    return_hresult(ctx, result);
   } else {
     return_hresult(ctx, fnk::nui::guest::kENuiFeatureNotInitialized);
   }
@@ -330,8 +435,17 @@ extern "C" REX_FUNC(sub_821C3CC0) {
 
 extern "C" REX_FUNC(sub_821C3120) {
   if (auto* nui = dispatcher()) {
-    return_hresult(ctx, nui->image_stream_get_next_frame(ctx.r3.u32, ctx.r4.u32,
-                                                          ctx.r5.u32));
+    reset_event(g_depth_event.load(std::memory_order_acquire));
+    const auto result =
+        nui->image_stream_get_next_frame(ctx.r3.u32, ctx.r4.u32, ctx.r5.u32);
+    const auto count = ++g_diagnostics.depth_requests;
+    if (count == 1 || count % 300U == 0U ||
+        (result == fnk::nui::guest::kSOk &&
+         !g_diagnostics.depth_success_logged.exchange(true))) {
+      REXLOG_INFO("FNK NUI ABI: image request {} -> 0x{:08X}", count,
+                  static_cast<std::uint32_t>(result));
+    }
+    return_hresult(ctx, result);
   } else {
     return_hresult(ctx, fnk::nui::guest::kENuiStreamNotEnabled);
   }
@@ -347,8 +461,16 @@ extern "C" REX_FUNC(sub_821C3448) {
 
 extern "C" REX_FUNC(sub_8220FFD0) {
   if (auto* nui = dispatcher(); nui && nui->owns_texture(ctx.r3.u32)) {
-    return_hresult(ctx, nui->texture_lock_rect(ctx.r3.u32, ctx.r4.u32, ctx.r5.u32,
-                                               ctx.r6.u32, ctx.r7.u32));
+    const auto result = nui->texture_lock_rect(ctx.r3.u32, ctx.r4.u32, ctx.r5.u32,
+                                               ctx.r6.u32, ctx.r7.u32);
+    const auto count = ++g_diagnostics.texture_locks;
+    if (count == 1 || count % 300U == 0U ||
+        (result == fnk::nui::guest::kSOk &&
+         !g_diagnostics.texture_lock_logged.exchange(true))) {
+      REXLOG_INFO("FNK NUI ABI: depth texture lock {} -> 0x{:08X}", count,
+                  static_cast<std::uint32_t>(result));
+    }
+    return_hresult(ctx, result);
   } else {
     __imp__sub_8220FFD0(ctx, base);
   }

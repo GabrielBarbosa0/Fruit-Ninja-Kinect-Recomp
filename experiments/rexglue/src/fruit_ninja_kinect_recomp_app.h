@@ -25,7 +25,7 @@ class FruitNinjaKinectRecompApp : public rex::ReXApp {
     xex_image = "game:\\default.uncompressed.xex";
   }
   void OnPostSetup() override {
-    fnk::rexbridge::initialize(runtime()->memory());
+    fnk::rexbridge::initialize(runtime()->memory(), runtime()->kernel_state());
   }
   void OnShutdown() override {
     fnk::rexbridge::shutdown();
