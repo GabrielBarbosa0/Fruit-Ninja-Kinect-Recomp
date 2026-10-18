@@ -1,0 +1,391 @@
+diff --git a/cmake/rexglue_helpers.cmake b/cmake/rexglue_helpers.cmake
+index 3fc216a..559c039 100644
+--- a/cmake/rexglue_helpers.cmake
++++ b/cmake/rexglue_helpers.cmake
+@@ -50,6 +50,13 @@ function(rexglue_configure_target target_name)
+         ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp
+         ${REXGLUE_SHARE_DIR}/rex_app.cpp)
+ 
++    # rex_app.cpp is compiled as part of the consumer target and directly
++    # includes overlay headers that include imgui.h. rexruntime links ImGui
++    # privately, so its include directory otherwise doesn't propagate here.
++    if(TARGET imgui::imgui)
++        target_link_libraries(${target_name} PRIVATE imgui::imgui)
++    endif()
++
+     target_compile_definitions(${target_name} PRIVATE
+         REXGLUE_BUILD_CONFIG="$<CONFIG>")
+ 
+diff --git a/include/rex/chrono/chrono.h b/include/rex/chrono/chrono.h
+index 8761cff..34071e9 100644
+--- a/include/rex/chrono/chrono.h
++++ b/include/rex/chrono/chrono.h
+@@ -116,6 +116,19 @@ using XSystemClock = detail::NtSystemClock<detail::Domain::Guest>;
+ 
+ namespace std::chrono {
+ 
++// LLVM-MinGW currently ships a libc++ configuration whose chrono feature set
++// predates C++20 clock_cast. ReXGlue only needs its explicitly specialised
++// clock pairs, so provide the standard customization point on that toolchain.
++#if !defined(__cpp_lib_chrono) || __cpp_lib_chrono < 201907L
++template <typename DestClock, typename SourceClock>
++struct clock_time_conversion;
++
++template <typename DestClock, typename SourceClock, typename Duration>
++constexpr auto clock_cast(const std::chrono::time_point<SourceClock, Duration>& source) {
++  return clock_time_conversion<DestClock, SourceClock>{}(source);
++}
++#endif
++
+ template <>
+ struct clock_time_conversion<::rex::chrono::WinSystemClock, ::rex::chrono::XSystemClock> {
+   using WClock_ = ::rex::chrono::WinSystemClock;
+diff --git a/include/rex/ppc/function.h b/include/rex/ppc/function.h
+index 611a52f..0dc91cc 100644
+--- a/include/rex/ppc/function.h
++++ b/include/rex/ppc/function.h
+@@ -50,6 +50,11 @@ inline PPCFunc* FindPPCFuncByName(const char* name) {
+   return nullptr;
+ }
+ 
++// Shared-library boundary for generated MinGW projects. Names beginning with
++// __imp_ are reserved by the PE/COFF ABI, so consumers resolve those hooks
++// through the runtime registry instead of importing them as C symbols.
++extern "C" PPCFunc* rex_find_ppc_func_by_name(const char* name);
++
+ namespace detail {
+ struct PPCFuncRegistrar {
+   PPCFuncRegistrar(const char* name, PPCFunc* func) {
+diff --git a/resources/templates/codegen/init_h.inja b/resources/templates/codegen/init_h.inja
+index 8449a0b..63af5b2 100644
+--- a/resources/templates/codegen/init_h.inja
++++ b/resources/templates/codegen/init_h.inja
+@@ -60,6 +60,20 @@ extern PPCFuncMapping PPCFuncMappings[];
+   REX_EXTERN(name);            \
+   REX_EXTERN(__imp__##name)
+ 
++#if defined(__MINGW32__)
++#define DECLARE_REX_IMPORT(name)                                          \
++  static inline REX_FUNC(name) {                                         \
++    if (auto* _rex_hook = rex::ppc::rex_find_ppc_func_by_name(#name)) {  \
++      (*_rex_hook)(ctx, base);                                           \
++    } else {                                                             \
++      REXKRNL_ERROR("Missing runtime hook: {}", #name);                 \
++      ctx.r3.u64 = 0xC0000002u;                                          \
++    }                                                                    \
++  }
++#else
++#define DECLARE_REX_IMPORT(name) DECLARE_REX_FUNC(name)
++#endif
++
+ #define DEFINE_REX_FUNC(name)                                  \
+   __attribute__((alias("__imp__" #name))) REX_WEAK_FUNC(name); \
+   REX_EXTERN(__imp__##name)
+@@ -316,5 +330,7 @@ inline std::atomic<i32>& ppc_global_lock_count_() {
+ // Function Declarations
+ //=============================================================================
+ 
+-{% for fn in functions %}DECLARE_REX_FUNC({{ fn.name }});
++{% for fn in functions %}{% if fn.is_import %}DECLARE_REX_IMPORT({{ fn.name }});
++{% else %}DECLARE_REX_FUNC({{ fn.name }});
++{% endif %}
+ {% endfor %}
+diff --git a/src/codegen/codegen_writer.cpp b/src/codegen/codegen_writer.cpp
+index 44efad4..0ad71d6 100644
+--- a/src/codegen/codegen_writer.cpp
++++ b/src/codegen/codegen_writer.cpp
+@@ -14,6 +14,8 @@
+ 
+ #include <algorithm>
+ #include <filesystem>
++#include <fstream>
++#include <limits>
+ #include <string>
+ #include <unordered_map>
+ 
+@@ -149,7 +151,9 @@ bool CodegenWriter::write(bool force) {
+   REXCODEGEN_TRACE("Output path: {}", outputPath.string());
+   std::filesystem::create_directories(outputPath);
+ 
+-  // --- Clean old generated files (from recompile.cpp) ---
++  // --- Track old generated files. Stale outputs are removed after the new
++  // set has been emitted, allowing unchanged files to retain their mtimes. ---
++  std::vector<std::string> previousGeneratedFiles;
+   std::string prefix = config().projectName + "_";
+   for (const auto& entry : std::filesystem::directory_iterator(outputPath)) {
+     auto ext = entry.path().extension();
+@@ -158,8 +162,7 @@ bool CodegenWriter::write(bool force) {
+       if (filename == "sources.cmake" || filename.starts_with(prefix) ||
+           filename.starts_with("ppc_recomp") || filename.starts_with("ppc_func_mapping") ||
+           filename.starts_with("function_table_init") || filename.starts_with("ppc_config")) {
+-        deletedFiles_.push_back(filename);
+-        std::filesystem::remove(entry.path());
++        previousGeneratedFiles.push_back(filename);
+       }
+     }
+   }
+@@ -225,30 +228,41 @@ bool CodegenWriter::write(bool force) {
+   if (runtime_)
+     emitCtx.resolver = runtime_->export_resolver();
+ 
+-  // Generate recomp files with size-based splitting
++  // Generate recomp files in stable guest-address buckets. Adding a manually
++  // discovered function then changes only its bucket instead of shifting every
++  // later function across size-based output files and forcing a full rebuild.
+   REXCODEGEN_TRACE("Recompiling {} functions...", functions.size());
+-  size_t currentFileBytes = 0;
+-  println("#include \"{}_init.h\"\n", projectName);
++  constexpr uint64_t kGuestAddressBucketSize = 0x20000;
++  uint64_t currentBucket = std::numeric_limits<uint64_t>::max();
++  std::vector<std::string> recompFileNames;
+ 
+   for (size_t i = 0; i < functions.size(); i++) {
+-    std::string code = functions[i]->emitCpp(emitCtx);
+-
+-    if (currentFileBytes > 0 && currentFileBytes + code.size() > REXCVAR_GET(max_file_size_bytes)) {
+-      SaveCurrentOutData();
++    const uint64_t bucket = functions[i]->base() / kGuestAddressBucketSize;
++    if (bucket != currentBucket) {
++      if (currentBucket != std::numeric_limits<uint64_t>::max()) {
++        const auto filename = fmt::format("{}_recomp.{:04X}.cpp", projectName, currentBucket);
++        SaveCurrentOutData(filename);
++        recompFileNames.push_back(filename);
++      }
++      currentBucket = bucket;
+       println("#include \"{}_init.h\"\n", projectName);
+-      currentFileBytes = 0;
+     }
+ 
++    std::string code = functions[i]->emitCpp(emitCtx);
++
+     if (code.size() > REXCVAR_GET(max_file_size_bytes)) {
+       REXCODEGEN_WARN("Function 0x{:08X} is {} bytes, exceeds max_file_size_bytes ({})",
+                       functions[i]->base(), code.size(), REXCVAR_GET(max_file_size_bytes));
+     }
+ 
+     out += code;
+-    currentFileBytes += code.size();
+   }
+ 
+-  SaveCurrentOutData();
++  if (currentBucket != std::numeric_limits<uint64_t>::max()) {
++    const auto filename = fmt::format("{}_recomp.{:04X}.cpp", projectName, currentBucket);
++    SaveCurrentOutData(filename);
++    recompFileNames.push_back(filename);
++  }
+   REXCODEGEN_TRACE("Recompilation complete.");
+ 
+   // Generate sources.cmake
+@@ -256,8 +270,8 @@ bool CodegenWriter::write(bool force) {
+   {
+     auto& recompFiles = tmplData["recomp_files"];
+     recompFiles = nlohmann::json::array();
+-    for (size_t i = 0; i < cppFileIndex; ++i) {
+-      recompFiles.push_back(fmt::format("{}_recomp.{}.cpp", projectName, i));
++    for (const auto& filename : recompFileNames) {
++      recompFiles.push_back(filename);
+     }
+     out = renderWithJson(registry, "codegen/sources_cmake", tmplData);
+     SaveCurrentOutData("sources.cmake");
+@@ -265,6 +279,13 @@ bool CodegenWriter::write(bool force) {
+ 
+   // Write all buffered files to disk
+   FlushPendingWrites();
++
++  for (const auto& filename : previousGeneratedFiles) {
++    if (std::ranges::find(writtenFiles_, filename) == writtenFiles_.end()) {
++      std::filesystem::remove(outputPath / filename);
++      deletedFiles_.push_back(filename);
++    }
++  }
+   return true;
+ }
+ 
+@@ -288,9 +309,25 @@ void CodegenWriter::FlushPendingWrites() {
+   std::filesystem::path outputPath = ctx_.configDir() / config().outDirectoryPath;
+ 
+   for (const auto& [filename, content] : pendingWrites) {
+-    std::string filePath = (outputPath / filename).string();
++    const auto path = outputPath / filename;
++    std::string filePath = path.string();
+     REXCODEGEN_TRACE("flush_pending_writes: filePath={}", filePath);
+ 
++    bool unchanged = false;
++    std::error_code sizeError;
++    if (std::filesystem::file_size(path, sizeError) == content.size() && !sizeError) {
++      std::ifstream existing(path, std::ios::binary);
++      std::string existingContent(content.size(), '\0');
++      existing.read(existingContent.data(), static_cast<std::streamsize>(existingContent.size()));
++      unchanged = existing && existingContent == content;
++    }
++
++    writtenFiles_.push_back(filename);
++    if (unchanged) {
++      REXCODEGEN_TRACE("Unchanged {}", filePath);
++      continue;
++    }
++
+     FILE* f = rex::filesystem::OpenFile(rex::to_path(filePath), "wb");
+     if (!f) {
+       REXCODEGEN_ERROR("Failed to open file for writing: {}", filePath);
+@@ -300,7 +337,6 @@ void CodegenWriter::FlushPendingWrites() {
+     fclose(f);
+     REXCODEGEN_TRACE("Wrote {} bytes to {}", content.size(), filePath);
+ 
+-    writtenFiles_.push_back(filename);
+   }
+ 
+   pendingWrites.clear();
+diff --git a/src/core/threading_win.cpp b/src/core/threading_win.cpp
+index 896dfec..1761eb0 100644
+--- a/src/core/threading_win.cpp
++++ b/src/core/threading_win.cpp
+@@ -48,6 +48,14 @@ struct THREADNAME_INFO {
+ #pragma pack(pop)
+ 
+ void raise_thread_name_exception(HANDLE thread, const std::string& name) {
++#if defined(__MINGW32__)
++  // LLVM-MinGW doesn't implement MSVC's __try/__except syntax. Modern Windows
++  // debuggers receive the name through SetThreadDescription above, so the
++  // legacy debugger exception is optional on this toolchain.
++  (void)thread;
++  (void)name;
++  return;
++#else
+   if (!IsDebuggerPresent()) {
+     return;
+   }
+@@ -61,6 +69,7 @@ void raise_thread_name_exception(HANDLE thread, const std::string& name) {
+                    reinterpret_cast<ULONG_PTR*>(&info));
+   } __except (EXCEPTION_EXECUTE_HANDLER) {  // NOLINT
+   }
++#endif
+ }
+ 
+ static void set_thread_name_impl(HANDLE thread, const std::string_view name) {
+diff --git a/src/filesystem/virtual_file_system.cpp b/src/filesystem/virtual_file_system.cpp
+index a1b4dad..d989f02 100644
+--- a/src/filesystem/virtual_file_system.cpp
++++ b/src/filesystem/virtual_file_system.cpp
+@@ -105,8 +105,19 @@ bool VirtualFileSystem::ResolveSymbolicLink(const std::string_view path, std::st
+ Entry* VirtualFileSystem::ResolvePath(const std::string_view path) {
+   auto global_lock = global_critical_region_.Acquire();
+ 
+-  // Resolve relative paths
+-  auto normalized_path(rex::string::utf8_canonicalize_guest_path(path));
++  // Xbox titles commonly open assets with paths relative to the title root.
++  // The game device is the launch directory, so anchor paths that don't name a
++  // guest device before canonicalization and symbolic-link resolution.
++  std::string rooted_path;
++  if (path.find(':') == std::string_view::npos &&
++      !path.starts_with("\\Device\\")) {
++    rooted_path = "game:\\";
++    rooted_path.append(path);
++  } else {
++    rooted_path = path;
++  }
++
++  auto normalized_path(rex::string::utf8_canonicalize_guest_path(rooted_path));
+ 
+   // Resolve symlinks.
+   std::string resolved_path;
+diff --git a/src/input/xinput/xinput_input_driver.cpp b/src/input/xinput/xinput_input_driver.cpp
+index 844612b..4e2fd46 100644
+--- a/src/input/xinput/xinput_input_driver.cpp
++++ b/src/input/xinput/xinput_input_driver.cpp
+@@ -73,12 +73,12 @@ X_STATUS XinputInputDriver::Setup() {
+   }
+ 
+   module_ = module;
+-  XInputGetCapabilities_ = xigc;
+-  XInputGetState_ = xigs;
+-  XInputGetStateEx_ = xigsEx;
+-  XInputGetKeystroke_ = xigk;
+-  XInputSetState_ = xiss;
+-  XInputEnable_ = xie;
++  XInputGetCapabilities_ = reinterpret_cast<void*>(xigc);
++  XInputGetState_ = reinterpret_cast<void*>(xigs);
++  XInputGetStateEx_ = reinterpret_cast<void*>(xigsEx);
++  XInputGetKeystroke_ = reinterpret_cast<void*>(xigk);
++  XInputSetState_ = reinterpret_cast<void*>(xiss);
++  XInputEnable_ = reinterpret_cast<void*>(xie);
+ 
+   return X_STATUS_SUCCESS;
+ }
+diff --git a/src/system/kernel_module.cpp b/src/system/kernel_module.cpp
+index 1dc45d1..4ede898 100644
+--- a/src/system/kernel_module.cpp
++++ b/src/system/kernel_module.cpp
+@@ -17,6 +17,12 @@
+ #include <rex/system/function_dispatcher.h>
+ #include <rex/thread/mutex.h>
+ 
++namespace rex::ppc {
++extern "C" PPCFunc* rex_find_ppc_func_by_name(const char* name) {
++  return FindPPCFuncByName(name);
++}
++}  // namespace rex::ppc
++
+ namespace rex::system {
+ 
+ KernelModule::KernelModule(KernelState* kernel_state, const std::string_view path)
+diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
+index 0b44e06..cf2859b 100644
+--- a/src/system/xsocket.cpp
++++ b/src/system/xsocket.cpp
+@@ -49,7 +49,9 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
+ 
+   if (proto == Protocol::IPPROTO_VDP) {
+     // VDP is a layer on top of UDP.
+-    proto = Protocol::IPPROTO_UDP;
++    // WinSock exposes IPPROTO_UDP as a macro, which collides with the scoped
++    // guest enum when compiling with MinGW headers.
++    proto = static_cast<Protocol>(17);
+   }
+ 
+   native_handle_ = socket(af, type, proto);
+@@ -247,4 +249,4 @@ bool XSocket::QueuePacket(uint32_t src_ip, uint16_t src_port, const uint8_t* buf
+   return true;
+ }
+ 
+-}  // namespace rex::system
+\ No newline at end of file
++}  // namespace rex::system
+diff --git a/src/ui/CMakeLists.txt b/src/ui/CMakeLists.txt
+index 2ab0631..7144258 100644
+--- a/src/ui/CMakeLists.txt
++++ b/src/ui/CMakeLists.txt
+@@ -138,7 +138,11 @@ if(REXGLUE_USE_VULKAN)
+ endif()
+ 
+ # Platform-specific dependencies
+-if(NOT WIN32)
++if(WIN32)
++    # presenter.cpp queries DXGI for monitor information even when Vulkan is
++    # the selected rendering backend.
++    target_link_libraries(rexui PUBLIC dxgi)
++else()
+     find_package(PkgConfig REQUIRED)
+     pkg_check_modules(X11_XCB REQUIRED x11-xcb)
+ 
+@@ -159,4 +163,3 @@ if(REXGLUE_USE_D3D12)
+     )
+ endif()
+ 
+-
+diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
+index 3cc4e22..24d1f07 100644
+--- a/thirdparty/CMakeLists.txt
++++ b/thirdparty/CMakeLists.txt
+@@ -113,7 +113,10 @@ target_compile_options(aes128 PRIVATE -w)
+ 
+ # libmspack - LZX decompression (only lzxd.c needed for XEX decompression)
+ # Uses cabextract version which has all needed headers in one place
+-set(MSPACK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libmspack/cabextract/mspack")
++# The cabextract tree contains relative symlinks into libmspack/mspack. On
++# Windows checkouts without symlink support those entries are plain text
++# files, so compile the canonical source directory directly.
++set(MSPACK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libmspack/libmspack/mspack")
+ add_library(mspack STATIC
+     ${MSPACK_DIR}/lzxd.c
+ )

@@ -1,0 +1,54 @@
+# Manual entry points discovered from ReXGlue's first whole-program analysis.
+#
+# These destinations are reached by unconditional branches, but aren't listed
+# in the XEX PDATA and weren't classified by the automatic gap-fill pass.
+# Keeping the hints separate makes them easy to audit or remove as ReXGlue's
+# scanner improves.
+
+[functions."0x821D7330"]
+name = "sub_821D7330"
+
+[functions."0x821E0B30"]
+name = "sub_821E0B30"
+
+[functions."0x821E0B48"]
+name = "sub_821E0B48"
+
+[functions."0x821E0B50"]
+name = "sub_821E0B50"
+
+[functions."0x821E0B58"]
+name = "sub_821E0B58"
+
+[functions."0x821E0B60"]
+name = "sub_821E0B60"
+
+# Second-level branch islands reached by the 0x821E0Bxx thunks above.
+[functions."0x821F93E8"]
+name = "sub_821F93E8"
+
+[functions."0x821F93F0"]
+name = "sub_821F93F0"
+
+[functions."0x821F93F8"]
+name = "sub_821F93F8"
+
+# First runtime-only indirect target reached during module launch. This isn't
+# present in PDATA and has no static direct branch for the scanner to follow.
+[functions."0x827A98E0"]
+name = "sub_827A98E0"
+
+[functions."0x82393EE0"]
+name = "sub_82393EE0"
+
+[functions."0x82390A60"]
+name = "sub_82390A60"
+
+[functions."0x82410E10"]
+name = "sub_82410E10"
+
+[functions."0x82169950"]
+name = "sub_82169950"
+
+[functions."0x8240A700"]
+name = "sub_8240A700"

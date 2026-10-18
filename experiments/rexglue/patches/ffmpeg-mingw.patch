@@ -1,0 +1,17 @@
+warning: in the working copy of 'config_windows_x86_64.h', LF will be replaced by CRLF the next time Git touches it
+diff --git a/config_windows_x86_64.h b/config_windows_x86_64.h
+index a64e1da..7b2561d 100644
+--- a/config_windows_x86_64.h
++++ b/config_windows_x86_64.h
+@@ -269,7 +269,11 @@
+ #define HAVE_TRUNC 1
+ #define HAVE_TRUNCF 1
+ #define HAVE_DOS_PATHS 1
++#if defined(__MINGW32__)
++#define HAVE_LIBC_MSVCRT 0
++#else
+ #define HAVE_LIBC_MSVCRT 1
++#endif
+ #define HAVE_MMAL_PARAMETER_VIDEO_MAX_NUM_CALLBACKS 0
+ #define HAVE_SECTION_DATA_REL_RO 0
+ #define HAVE_THREADS 1
