@@ -20,6 +20,10 @@ struct CameraCalibration {
 struct TrackingThresholds {
   float inferred_confidence{0.25F};
   float tracked_confidence{0.60F};
+  // MoveNet exposes wrists rather than palms and assigns them lower confidence
+  // during fast motion. Keep a separate threshold so slashing hands don't
+  // disappear while the torso remains conservative.
+  float hand_tracked_confidence{0.35F};
   std::size_t minimum_tracked_joints{6};
 };
 
@@ -30,6 +34,13 @@ struct SmoothingParameters {
   float prediction{0.50F};
   float jitter_radius_m{0.05F};
   float maximum_deviation_radius_m{0.04F};
+  // Hands need less latency than the body: Fruit Ninja derives a slash from
+  // their frame-to-frame travel.
+  float hand_smoothing{0.15F};
+  float hand_correction{0.70F};
+  float hand_prediction{0.25F};
+  float hand_jitter_radius_m{0.025F};
+  float hand_maximum_deviation_radius_m{0.02F};
 };
 
 class SkeletonMapper {

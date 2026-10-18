@@ -34,6 +34,49 @@ PoseJoint midpoint(const PoseJoint& first, const PoseJoint& second) noexcept {
           0.0F, std::min(first.confidence, second.confidence)};
 }
 
+PoseJoint extrapolate_hand(const PoseJoint& elbow, const PoseJoint& wrist) noexcept {
+  // COCO/MoveNet stops at the wrist, while Kinect's Hand joint is near the
+  // palm. Extend the forearm a little so the title receives a useful blade
+  // tip and its velocity is not artificially shortened.
+  constexpr float kPalmExtension = 0.30F;
+  PoseJoint hand = wrist;
+  hand.image.x = std::clamp(wrist.image.x + (wrist.image.x - elbow.image.x) * kPalmExtension,
+                            0.0F, 1.0F);
+  hand.image.y = std::clamp(wrist.image.y + (wrist.image.y - elbow.image.y) * kPalmExtension,
+                            0.0F, 1.0F);
+  hand.relative_depth =
+      wrist.relative_depth + (wrist.relative_depth - elbow.relative_depth) * kPalmExtension;
+  return hand;
+}
+
+PoseJoint recover_wrist(const PoseJoint& shoulder, const PoseJoint& elbow,
+                        const PoseJoint& detected_wrist) noexcept {
+  constexpr float kUsableWristConfidence = 0.20F;
+  constexpr float kUsableArmConfidence = 0.35F;
+  if (detected_wrist.confidence >= kUsableWristConfidence ||
+      shoulder.confidence < kUsableArmConfidence ||
+      elbow.confidence < kUsableArmConfidence) {
+    return detected_wrist;
+  }
+
+  // Fast hands are the first MoveNet points to lose confidence. Continue the
+  // upper-arm direction by roughly one forearm length for a short-lived but
+  // useful Kinect wrist instead of dropping the blade entirely.
+  constexpr float kForearmToUpperArmRatio = 0.85F;
+  PoseJoint wrist{};
+  wrist.image.x = std::clamp(
+      elbow.image.x + (elbow.image.x - shoulder.image.x) * kForearmToUpperArmRatio,
+      0.0F, 1.0F);
+  wrist.image.y = std::clamp(
+      elbow.image.y + (elbow.image.y - shoulder.image.y) * kForearmToUpperArmRatio,
+      0.0F, 1.0F);
+  wrist.relative_depth =
+      elbow.relative_depth +
+      (elbow.relative_depth - shoulder.relative_depth) * kForearmToUpperArmRatio;
+  wrist.confidence = std::min(shoulder.confidence, elbow.confidence) * 0.55F;
+  return wrist;
+}
+
 }  // namespace
 
 PoseFrame MoveNetAdapter::convert(const MoveNetPoseFrame& source) const noexcept {
@@ -66,10 +109,21 @@ PoseFrame MoveNetAdapter::convert(const MoveNetPoseFrame& source) const noexcept
   assign(Joint::AnkleLeft, MoveNetKeypoint::LeftAnkle);
   assign(Joint::AnkleRight, MoveNetKeypoint::RightAnkle);
 
-  destination.joints[joint_index(Joint::HandLeft)] =
-      destination.joints[joint_index(Joint::WristLeft)];
-  destination.joints[joint_index(Joint::HandRight)] =
-      destination.joints[joint_index(Joint::WristRight)];
+  destination.joints[joint_index(Joint::WristLeft)] = recover_wrist(
+      destination.joints[joint_index(Joint::ShoulderLeft)],
+      destination.joints[joint_index(Joint::ElbowLeft)],
+      destination.joints[joint_index(Joint::WristLeft)]);
+  destination.joints[joint_index(Joint::WristRight)] = recover_wrist(
+      destination.joints[joint_index(Joint::ShoulderRight)],
+      destination.joints[joint_index(Joint::ElbowRight)],
+      destination.joints[joint_index(Joint::WristRight)]);
+
+  destination.joints[joint_index(Joint::HandLeft)] = extrapolate_hand(
+      destination.joints[joint_index(Joint::ElbowLeft)],
+      destination.joints[joint_index(Joint::WristLeft)]);
+  destination.joints[joint_index(Joint::HandRight)] = extrapolate_hand(
+      destination.joints[joint_index(Joint::ElbowRight)],
+      destination.joints[joint_index(Joint::WristRight)]);
   destination.joints[joint_index(Joint::FootLeft)] =
       destination.joints[joint_index(Joint::AnkleLeft)];
   destination.joints[joint_index(Joint::FootRight)] =

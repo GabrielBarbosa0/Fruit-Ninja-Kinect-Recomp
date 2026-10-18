@@ -19,6 +19,7 @@ struct Arguments {
   std::size_t samples{30};
   float confidence{0.30F};
   float reference_depth_m{2.0F};
+  float game_reference_depth_m{2.0F};
   std::uint32_t timeout_seconds{45};
   std::filesystem::path model{"tools/pose/models/movenet-singlepose-lightning.onnx"};
   std::filesystem::path output{"artifacts/calibration/droidcam.toml"};
@@ -40,6 +41,8 @@ bool parse_arguments(int argc, char** argv, Arguments& arguments) {
         arguments.confidence = std::stof(value);
       } else if (option == "--depth") {
         arguments.reference_depth_m = std::stof(value);
+      } else if (option == "--game-depth") {
+        arguments.game_reference_depth_m = std::stof(value);
       } else if (option == "--timeout") {
         arguments.timeout_seconds = static_cast<std::uint32_t>(std::stoul(value));
       } else if (option == "--model") {
@@ -55,7 +58,9 @@ bool parse_arguments(int argc, char** argv, Arguments& arguments) {
   }
   return arguments.samples > 0 && arguments.timeout_seconds > 0 &&
          arguments.confidence >= 0.0F && arguments.confidence <= 1.0F &&
-         arguments.reference_depth_m >= 0.5F && arguments.reference_depth_m <= 4.0F;
+         arguments.reference_depth_m >= 0.5F && arguments.reference_depth_m <= 4.0F &&
+         arguments.game_reference_depth_m >= 1.3F &&
+         arguments.game_reference_depth_m <= 3.0F;
 }
 
 const char* quality_name(fnk::nui::CalibrationQuality quality) {
@@ -68,7 +73,8 @@ int main(int argc, char** argv) {
   Arguments arguments;
   if (!parse_arguments(argc, argv, arguments)) {
     std::cerr << "Usage: fnk_calibration_test [--device N] [--samples N] "
-                 "[--confidence 0..1] [--depth metres] [--timeout seconds] "
+                 "[--confidence 0..1] [--depth physical-metres] "
+                 "[--game-depth 1.3..3.0] [--timeout seconds] "
                  "[--model file.onnx] "
                  "[--output profile.toml]\n";
     return EXIT_FAILURE;
@@ -90,6 +96,7 @@ int main(int argc, char** argv) {
   calibration_options.required_samples = arguments.samples;
   calibration_options.minimum_confidence = arguments.confidence;
   calibration_options.reference_depth_m = arguments.reference_depth_m;
+  calibration_options.game_reference_depth_m = arguments.game_reference_depth_m;
   fnk::nui::GameSpaceCalibrator calibrator(calibration_options);
   fnk::camera::CameraFrame frame;
   fnk::nui::PoseFrame pose;
@@ -151,6 +158,7 @@ int main(int argc, char** argv) {
             << "  floor y: " << profile.floor_y << '\n'
             << "  normalized torso: " << profile.reference_torso_normalized << '\n'
             << "  reference depth: " << profile.reference_depth_m << " m\n"
+            << "  Kinect game depth: " << profile.game_reference_depth_m << " m\n"
             << "  mapped hip: (" << skeleton.position_m.x << ", " << skeleton.position_m.y
             << ", " << skeleton.position_m.z << ") m\n"
             << "Saved profile to " << arguments.output.string() << '\n';

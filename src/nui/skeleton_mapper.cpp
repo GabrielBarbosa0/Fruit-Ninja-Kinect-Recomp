@@ -131,9 +131,11 @@ Vec3 SkeletonMapper::project(const PoseJoint& joint, float body_depth_m) const n
         profile.reference_torso_length_m / profile.reference_torso_normalized;
     const float distance_scale = depth / profile.reference_depth_m;
     const float vertical_scale = reference_scale * distance_scale;
+    const float game_depth =
+        depth * profile.game_reference_depth_m / profile.reference_depth_m;
     return {(joint.image.x - profile.center_x) * vertical_scale *
                 profile.image_aspect_ratio,
-            (profile.floor_y - joint.image.y) * vertical_scale, depth};
+            (profile.floor_y - joint.image.y) * vertical_scale, game_depth};
   }
 
   const float half_width = depth * std::tan(radians(calibration_.horizontal_fov_degrees) * 0.5F);
@@ -152,21 +154,30 @@ Vec3 SkeletonMapper::smooth(std::size_t index, Vec3 raw) {
     return raw;
   }
 
+  const bool is_hand = index == joint_index(Joint::HandLeft) ||
+                       index == joint_index(Joint::HandRight);
+  const float jitter_radius =
+      is_hand ? smoothing_.hand_jitter_radius_m : smoothing_.jitter_radius_m;
+  const float smoothing = is_hand ? smoothing_.hand_smoothing : smoothing_.smoothing;
+  const float correction = is_hand ? smoothing_.hand_correction : smoothing_.correction;
+  const float prediction = is_hand ? smoothing_.hand_prediction : smoothing_.prediction;
+  const float maximum_deviation = is_hand ? smoothing_.hand_maximum_deviation_radius_m
+                                          : smoothing_.maximum_deviation_radius_m;
+
   Vec3 jitter_filtered = raw;
   const float raw_delta = length(subtract(raw, history.filtered));
-  if (smoothing_.jitter_radius_m > kEpsilon && raw_delta <= smoothing_.jitter_radius_m) {
-    jitter_filtered = lerp(history.filtered, raw, raw_delta / smoothing_.jitter_radius_m);
+  if (jitter_radius > kEpsilon && raw_delta <= jitter_radius) {
+    jitter_filtered = lerp(history.filtered, raw, raw_delta / jitter_radius);
   }
 
   const Vec3 predicted_from_history = add(history.filtered, history.trend);
-  const Vec3 filtered = lerp(jitter_filtered, predicted_from_history,
-                             clamp01(smoothing_.smoothing));
+  const Vec3 filtered =
+      lerp(jitter_filtered, predicted_from_history, clamp01(smoothing));
   const Vec3 difference = subtract(filtered, history.filtered);
-  const Vec3 trend = lerp(history.trend, difference, clamp01(smoothing_.correction));
-  Vec3 predicted = add(filtered, scale(trend, std::max(0.0F, smoothing_.prediction)));
+  const Vec3 trend = lerp(history.trend, difference, clamp01(correction));
+  Vec3 predicted = add(filtered, scale(trend, std::max(0.0F, prediction)));
 
-  predicted = clamp_distance(predicted, raw,
-                             std::max(0.0F, smoothing_.maximum_deviation_radius_m));
+  predicted = clamp_distance(predicted, raw, std::max(0.0F, maximum_deviation));
   history.filtered = filtered;
   history.trend = trend;
   return predicted;
@@ -191,7 +202,11 @@ SkeletonFrame SkeletonMapper::map(const PoseFrame& pose) {
     SkeletonJoint& destination = result.joints[index];
     const float confidence = clamp01(source.confidence);
 
-    if (confidence >= thresholds_.tracked_confidence) {
+    const bool is_hand = index == joint_index(Joint::HandLeft) ||
+                         index == joint_index(Joint::HandRight);
+    const float tracked_confidence =
+        is_hand ? thresholds_.hand_tracked_confidence : thresholds_.tracked_confidence;
+    if (confidence >= tracked_confidence) {
       destination.state = JointTrackingState::Tracked;
       ++tracked_joint_count;
       ++visible_joint_count;

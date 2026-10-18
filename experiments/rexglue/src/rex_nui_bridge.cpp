@@ -16,8 +16,11 @@
 #include <rex/system/xevent.h>
 #include <rex/system/xmemory.h>
 
+#include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -76,6 +79,8 @@ struct NuiDiagnostics {
   std::atomic_bool skeleton_success_logged{};
   std::atomic_bool depth_success_logged{};
   std::atomic_bool texture_lock_logged{};
+  std::atomic_uint64_t player_selection_calls{};
+  std::atomic_uint64_t skeleton_processing_calls{};
 };
 
 NuiDiagnostics g_diagnostics;
@@ -274,6 +279,11 @@ void publish_live_frames(std::stop_token stop_token) {
   fnk::camera::CameraFrame camera_frame;
   fnk::nui::PoseFrame pose;
   std::uint64_t previous_sequence = 0;
+  std::uint64_t previous_pose_timestamp = 0;
+  fnk::nui::SkeletonJoint previous_left_hand;
+  fnk::nui::SkeletonJoint previous_right_hand;
+  float peak_left_hand_speed = 0.0F;
+  float peak_right_hand_speed = 0.0F;
   bool tracking_announced = false;
   REXLOG_INFO("FNK NUI: live camera {} started (requested {}x{} at {} FPS).",
               camera_options.device_index, camera_options.requested_width,
@@ -291,12 +301,34 @@ void publish_live_frames(std::stop_token stop_token) {
       continue;
     }
     auto skeleton = mapper.map(pose);
+    const auto& left = skeleton.joints[fnk::nui::joint_index(fnk::nui::Joint::HandLeft)];
+    const auto& right = skeleton.joints[fnk::nui::joint_index(fnk::nui::Joint::HandRight)];
+    if (previous_pose_timestamp != 0 && pose.timestamp_us > previous_pose_timestamp) {
+      const float elapsed = static_cast<float>(pose.timestamp_us - previous_pose_timestamp) /
+                            1'000'000.0F;
+      const auto speed = [elapsed](const fnk::nui::SkeletonJoint& current,
+                                   const fnk::nui::SkeletonJoint& previous) {
+        if (current.state == fnk::nui::JointTrackingState::NotTracked ||
+            previous.state == fnk::nui::JointTrackingState::NotTracked || elapsed <= 0.0F) {
+          return 0.0F;
+        }
+        const float x = current.position_m.x - previous.position_m.x;
+        const float y = current.position_m.y - previous.position_m.y;
+        const float z = current.position_m.z - previous.position_m.z;
+        return std::sqrt(x * x + y * y + z * z) / elapsed;
+      };
+      peak_left_hand_speed =
+          std::max(peak_left_hand_speed, speed(left, previous_left_hand));
+      peak_right_hand_speed =
+          std::max(peak_right_hand_speed, speed(right, previous_right_hand));
+    }
+    previous_pose_timestamp = pose.timestamp_us;
+    previous_left_hand = left;
+    previous_right_hand = right;
     if (!tracking_announced &&
         skeleton.state != fnk::nui::SkeletonTrackingState::NotTracked) {
       tracking_announced = true;
       const auto stats = estimator.stats();
-      const auto& left = skeleton.joints[fnk::nui::joint_index(fnk::nui::Joint::HandLeft)];
-      const auto& right = skeleton.joints[fnk::nui::joint_index(fnk::nui::Joint::HandRight)];
       REXLOG_INFO(
           "FNK NUI: first live skeleton published after {} pose frames "
           "(body state {}, inference {:.2f} ms, left hand state {} at "
@@ -310,9 +342,15 @@ void publish_live_frames(std::stop_token stop_token) {
     const auto stats = estimator.stats();
     if (stats.frames_processed % 120U == 0U) {
       REXLOG_DEBUG("FNK NUI: live pose heartbeat: {} frames, body state {}, "
+                   "hands [{},{}], peak hand speed [{:.2f},{:.2f}] m/s, "
                    "inference {:.2f} ms.",
                    stats.frames_processed, static_cast<std::uint32_t>(skeleton.state),
+                   static_cast<std::uint32_t>(left.state),
+                   static_cast<std::uint32_t>(right.state), peak_left_hand_speed,
+                   peak_right_hand_speed,
                    stats.last_inference_ms);
+      peak_left_hand_speed = 0.0F;
+      peak_right_hand_speed = 0.0F;
     }
     auto depth = depth_synthesizer.synthesize(pose, skeleton);
     publish(skeleton, depth);
@@ -350,6 +388,8 @@ void initialize(rex::memory::Memory* memory, rex::system::KernelState* kernel_st
   g_diagnostics.skeleton_success_logged = false;
   g_diagnostics.depth_success_logged = false;
   g_diagnostics.texture_lock_logged = false;
+  g_diagnostics.player_selection_calls = 0;
+  g_diagnostics.skeleton_processing_calls = 0;
   g_skeleton_event = 0;
   g_depth_event = 0;
   g_frame_publisher = std::jthread(publish_live_frames);
@@ -482,4 +522,54 @@ extern "C" REX_FUNC(sub_8220E580) {
   } else {
     __imp__sub_8220E580(ctx, base);
   }
+}
+
+extern "C" REX_FUNC(sub_8266C960) {
+  const auto frame_slot = ctx.r3.u32;
+  constexpr std::uint32_t kSkeletonFrames = 0x82803370U;
+  constexpr std::uint32_t kSkeletonFrameStride = 2736U;
+  constexpr std::uint32_t kSelectionMode = 0x8286B66CU;
+  constexpr std::uint32_t kSelectionConstants = 0x8212CA20U;
+  const auto frame = kSkeletonFrames + frame_slot * kSkeletonFrameStride;
+  const auto state_before = REX_LOAD_U32(frame + 0x30U);
+  const auto z_before = std::bit_cast<float>(REX_LOAD_U32(frame + 0x48U));
+  __imp__sub_8266C960(ctx, base);
+  const auto count = ++g_diagnostics.player_selection_calls;
+  if (count == 1 || count % 300U == 0U) {
+    constexpr std::uint32_t kPrimaryPlayerIndex = 0x82804978U;
+    constexpr std::uint32_t kSecondaryPlayerIndex = 0x8280497CU;
+    const auto near_new =
+        std::bit_cast<float>(REX_LOAD_U32(kSelectionConstants + 0x18U));
+    const auto far_new =
+        std::bit_cast<float>(REX_LOAD_U32(kSelectionConstants + 0x1CU));
+    const auto near_tracked =
+        std::bit_cast<float>(REX_LOAD_U32(kSelectionConstants));
+    const auto far_tracked =
+        std::bit_cast<float>(REX_LOAD_U32(kSelectionConstants + 0x14U));
+    REXLOG_INFO(
+        "FNK game: player selection {} (frame slot {}, mode {}, body state {}, "
+        "z {:.2f}, range new [{:.2f},{:.2f}] tracked [{:.2f},{:.2f}], primary "
+        "{}, secondary {})",
+        count, frame_slot, REX_LOAD_U32(kSelectionMode), state_before, z_before,
+        near_new, far_new, near_tracked, far_tracked,
+        static_cast<std::int32_t>(REX_LOAD_U32(kPrimaryPlayerIndex)),
+        static_cast<std::int32_t>(REX_LOAD_U32(kSecondaryPlayerIndex)));
+  }
+}
+
+extern "C" REX_FUNC(sub_8266C2F0) {
+  const auto frame = ctx.r3.u32;
+  const auto count = ++g_diagnostics.skeleton_processing_calls;
+  if (count == 1 || count % 300U == 0U) {
+    constexpr std::uint32_t kFirstSkeleton = 0x30U;
+    const auto state = REX_LOAD_U32(frame + kFirstSkeleton);
+    const auto tracking_id = REX_LOAD_U32(frame + kFirstSkeleton + 0x04U);
+    const auto x = std::bit_cast<float>(REX_LOAD_U32(frame + kFirstSkeleton + 0x10U));
+    const auto y = std::bit_cast<float>(REX_LOAD_U32(frame + kFirstSkeleton + 0x14U));
+    const auto z = std::bit_cast<float>(REX_LOAD_U32(frame + kFirstSkeleton + 0x18U));
+    REXLOG_INFO("FNK game: processing skeleton {} (state {}, tracking {}, hip "
+                "[{:.2f},{:.2f},{:.2f}])",
+                count, state, tracking_id, x, y, z);
+  }
+  __imp__sub_8266C2F0(ctx, base);
 }

@@ -22,7 +22,10 @@ struct GameSpaceProfile {
   float floor_y{1.0F};
   float reference_torso_normalized{};
   float reference_torso_length_m{0.55F};
+  // Physical distance used while calibrating the webcam.
   float reference_depth_m{2.0F};
+  // Kinect-space distance exposed to the title for that same neutral pose.
+  float game_reference_depth_m{2.0F};
   float image_aspect_ratio{4.0F / 3.0F};
   std::uint32_t sample_count{};
 
@@ -35,6 +38,7 @@ struct GameSpaceCalibrationOptions {
   float minimum_floor_confidence{0.55F};
   float reference_torso_length_m{0.55F};
   float reference_depth_m{2.0F};
+  float game_reference_depth_m{2.0F};
   // Used only when the legs are outside the camera frame.
   float estimated_hip_to_floor_in_torsos{2.15F};
 };

@@ -46,6 +46,7 @@ const char* quality_name(CalibrationQuality quality) noexcept {
 bool GameSpaceProfile::valid() const noexcept {
   return quality != CalibrationQuality::Invalid && reference_torso_normalized > 0.01F &&
          reference_torso_length_m > 0.0F && reference_depth_m > 0.0F &&
+         game_reference_depth_m > 0.0F &&
          image_aspect_ratio > 0.0F;
 }
 
@@ -123,6 +124,7 @@ bool GameSpaceCalibrator::add_sample(const PoseFrame& pose, std::uint32_t image_
   impl_->result.reference_torso_normalized = median(impl_->torsos);
   impl_->result.reference_torso_length_m = options_.reference_torso_length_m;
   impl_->result.reference_depth_m = options_.reference_depth_m;
+  impl_->result.game_reference_depth_m = options_.game_reference_depth_m;
   impl_->result.image_aspect_ratio =
       static_cast<float>(image_width) / static_cast<float>(image_height);
   impl_->result.sample_count = static_cast<std::uint32_t>(impl_->torsos.size());
@@ -183,13 +185,14 @@ bool save_game_space_profile(const GameSpaceProfile& profile,
     }
     return false;
   }
-  output << "version = 1\n"
+  output << "version = 2\n"
          << "quality = \"" << quality_name(profile.quality) << "\"\n"
          << "center_x = " << profile.center_x << '\n'
          << "floor_y = " << profile.floor_y << '\n'
          << "reference_torso_normalized = " << profile.reference_torso_normalized << '\n'
          << "reference_torso_length_m = " << profile.reference_torso_length_m << '\n'
          << "reference_depth_m = " << profile.reference_depth_m << '\n'
+         << "game_reference_depth_m = " << profile.game_reference_depth_m << '\n'
          << "image_aspect_ratio = " << profile.image_aspect_ratio << '\n'
          << "sample_count = " << profile.sample_count << '\n';
   if (!output.good()) {
@@ -246,6 +249,8 @@ bool load_game_space_profile(const std::filesystem::path& path, GameSpaceProfile
         loaded.reference_torso_length_m = std::stof(value);
       } else if (key == "reference_depth_m") {
         loaded.reference_depth_m = std::stof(value);
+      } else if (key == "game_reference_depth_m") {
+        loaded.game_reference_depth_m = std::stof(value);
       } else if (key == "image_aspect_ratio") {
         loaded.image_aspect_ratio = std::stof(value);
       } else if (key == "sample_count") {

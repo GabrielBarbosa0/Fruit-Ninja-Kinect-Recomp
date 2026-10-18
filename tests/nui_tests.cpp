@@ -336,8 +336,8 @@ void test_confidence_states() {
 
   SkeletonMapper mapper;
   const auto result = mapper.map(pose);
-  expect(result.joints[joint_index(Joint::HandLeft)].state == JointTrackingState::Inferred,
-         "medium confidence becomes inferred");
+  expect(result.joints[joint_index(Joint::HandLeft)].state == JointTrackingState::Tracked,
+         "medium-confidence hand remains tracked during fast motion");
   expect(result.joints[joint_index(Joint::HandRight)].state == JointTrackingState::NotTracked,
          "low confidence becomes not tracked");
 }
@@ -359,6 +359,16 @@ void test_smoothing_and_tracking_reset() {
       first.joints[joint_index(Joint::HandRight)].position_m.x;
   expect(filtered_motion > 0.0F && filtered_motion < raw_motion,
          "small image jitter is reduced without reversing motion");
+
+  auto swiped_pose = first_pose;
+  swiped_pose.timestamp_us += 33'334;
+  swiped_pose.joints[joint_index(Joint::HandRight)].image.x += 0.20F;
+  const auto swiped = mapper.map(swiped_pose);
+  const float swipe_motion =
+      swiped.joints[joint_index(Joint::HandRight)].position_m.x -
+      jittered.joints[joint_index(Joint::HandRight)].position_m.x;
+  expect(swipe_motion > raw_motion * 8.0F,
+         "fast hand motion keeps enough amplitude for slash recognition");
 
   auto new_player = first_pose;
   new_player.tracking_id = 99;
@@ -446,11 +456,25 @@ void test_movenet_adapter() {
          "MoveNet hip center is synthesized");
   expect(near(pose.joints[joint_index(Joint::Spine)].image.y, 0.45F),
          "MoveNet spine is synthesized");
-  expect(near(pose.joints[joint_index(Joint::HandLeft)].image.x, 0.15F) &&
+  expect(near(pose.joints[joint_index(Joint::HandLeft)].image.x, 0.045F) &&
              near(pose.joints[joint_index(Joint::HandLeft)].confidence, 0.75F),
-         "MoveNet wrist supplies the Kinect hand fallback");
+         "MoveNet wrist and forearm synthesize a Kinect palm position");
   expect(near(pose.joints[joint_index(Joint::FootLeft)].image.y, 0.92F),
          "MoveNet ankle supplies the Kinect foot fallback");
+
+  source.keypoints[keypoint_index(MoveNetKeypoint::RightShoulder)] =
+      {0.60F, 0.30F, 0.90F};
+  source.keypoints[keypoint_index(MoveNetKeypoint::RightElbow)] =
+      {0.72F, 0.42F, 0.80F};
+  source.keypoints[keypoint_index(MoveNetKeypoint::RightWrist)] =
+      {0.50F, 0.50F, 0.05F};
+  const auto recovered = MoveNetAdapter{}.convert(source);
+  const auto& recovered_wrist = recovered.joints[joint_index(Joint::WristRight)];
+  const auto& recovered_hand = recovered.joints[joint_index(Joint::HandRight)];
+  expect(recovered_wrist.image.x > 0.80F && recovered_wrist.confidence >= 0.35F,
+         "lost fast wrist is recovered from the visible arm direction");
+  expect(recovered_hand.image.x > recovered_wrist.image.x,
+         "recovered palm extends beyond the reconstructed wrist");
 }
 
 void test_depth_synthesis() {
@@ -510,6 +534,7 @@ void test_game_space_calibration() {
   torso_options.required_samples = 3;
   torso_options.minimum_confidence = 0.35F;
   torso_options.reference_depth_m = 1.0F;
+  torso_options.game_reference_depth_m = 2.0F;
   GameSpaceCalibrator fallback(torso_options);
   for (int sample = 0; sample < 3; ++sample) {
     fallback.add_sample(torso_only, 640, 480);
@@ -522,8 +547,8 @@ void test_game_space_calibration() {
   SkeletonMapper close_range_mapper;
   close_range_mapper.set_game_space_profile(fallback.profile());
   const auto close_range_skeleton = close_range_mapper.map(torso_only);
-  expect(near(close_range_skeleton.position_m.z, 1.0F, 2.0e-2F),
-         "measured close-range depth is preserved by torso-only calibration");
+  expect(near(close_range_skeleton.position_m.z, 2.0F, 2.0e-2F),
+         "close-range webcam depth maps into the Kinect acquisition range");
 }
 
 }  // namespace

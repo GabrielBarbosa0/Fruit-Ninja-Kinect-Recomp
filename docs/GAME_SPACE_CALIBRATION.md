@@ -9,9 +9,10 @@ Medians make the result resistant to landmark jitter.
 
 - `x = 0` is the calibrated hip center; positive x points toward image-right.
 - `y = 0` is the floor; positive y points upward.
-- `z` is distance from the camera in metres.
-- The neutral pose defaults to `z = 2.0 m` with a `0.55 m` shoulder-to-hip
-  torso length.
+- `z` is the virtual Kinect distance exposed to the game.
+- Physical webcam distance and virtual game distance are calibrated separately.
+  The neutral game pose defaults to `z = 2.0 m` with a `0.55 m`
+  shoulder-to-hip torso length.
 
 Current depth is estimated from the ratio between calibrated and observed
 torso size. Horizontal scale accounts for the camera frame's aspect ratio.
@@ -25,13 +26,15 @@ Run:
 
 ```powershell
 .\build\native-release\fnk_calibration_test.exe --device 0 --samples 30 `
-    --confidence 0.30 --depth 1.0 --timeout 45 `
+    --confidence 0.30 --depth 1.0 --game-depth 2.0 --timeout 45 `
     --output .\artifacts\calibration\droidcam.toml
 ```
 
 Set `--depth` to the measured distance between the player and camera during
 calibration. A close, torso-only setup at roughly one metre should use
-`--depth 1.0`; the accepted range is 0.5–4.0 m.
+`--depth 1.0`. `--game-depth` controls the virtual Kinect distance reported to
+the title; keep the default `2.0` for close setups. Fruit Ninja acquires a new
+player only between 1.3 and 3.0 virtual metres.
 
 For best results:
 
@@ -54,7 +57,7 @@ The generated TOML-like profile records:
 - calibration quality;
 - normalized horizontal center and floor line;
 - neutral normalized torso size;
-- metric torso length and reference depth;
+- metric torso length, physical reference depth, and virtual Kinect depth;
 - source image aspect ratio and sample count.
 
 `save_game_space_profile()` and `load_game_space_profile()` provide the native
