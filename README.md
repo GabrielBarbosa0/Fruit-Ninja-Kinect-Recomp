@@ -75,6 +75,21 @@ With the portable toolchain described in `docs/TOOLING.md` present:
 This builds `fnk_nui` and runs the deterministic NUI tests. Use
 `-Configuration Release` for an optimized build.
 
+## Graphical launcher
+
+After building the native tools and the ReXGlue game, double-click
+`Jogar-Fruit-Ninja.bat`. The launcher can:
+
+- enumerate and select Media Foundation cameras;
+- choose capture resolution and frame rate;
+- preview the live MoveNet skeleton and both hand points;
+- calibrate the measured player-to-camera distance into Kinect game space;
+- remember local settings and start the game with the selected camera.
+
+Close the motion preview before calibrating or starting the game because only
+one process can own the selected camera at a time. Launcher settings are stored
+locally under `state/` and are not committed.
+
 To validate the compatibility layer against the modern Xenon guest-memory and
 CPU V2 contracts, configure the optional bridge and run its probe:
 

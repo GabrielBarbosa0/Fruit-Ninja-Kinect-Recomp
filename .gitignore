@@ -8,6 +8,7 @@
 # Local builds, generated recompilation output, and logs.
 /build/
 /generated/
+/state/
 *.log
 
 # IDE and operating-system state.

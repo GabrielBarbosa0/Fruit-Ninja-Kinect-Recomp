@@ -76,6 +76,10 @@ if(WIN32 AND FNK_BUILD_CAMERA)
             add_executable(fnk_pose_test apps/fnk_pose_test.cpp)
             target_link_libraries(fnk_pose_test PRIVATE fnk_pose)
             target_compile_features(fnk_pose_test PRIVATE cxx_std_20)
+
+            add_executable(fnk_pose_preview apps/fnk_pose_preview.cpp)
+            target_link_libraries(fnk_pose_preview PRIVATE fnk_pose user32 gdi32)
+            target_compile_features(fnk_pose_preview PRIVATE cxx_std_20)
             add_custom_command(TARGET fnk_pose_test POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${FNK_ONNXRUNTIME_ROOT}/lib/onnxruntime.dll"
@@ -83,6 +87,14 @@ if(WIN32 AND FNK_BUILD_CAMERA)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${FNK_ONNXRUNTIME_ROOT}/lib/onnxruntime_providers_shared.dll"
                     "$<TARGET_FILE_DIR:fnk_pose_test>"
+            )
+            add_custom_command(TARGET fnk_pose_preview POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${FNK_ONNXRUNTIME_ROOT}/lib/onnxruntime.dll"
+                    "$<TARGET_FILE_DIR:fnk_pose_preview>"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${FNK_ONNXRUNTIME_ROOT}/lib/onnxruntime_providers_shared.dll"
+                    "$<TARGET_FILE_DIR:fnk_pose_preview>"
             )
 
             add_executable(fnk_calibration_test apps/fnk_calibration_test.cpp)
